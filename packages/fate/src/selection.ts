@@ -38,6 +38,7 @@ const isConnectionSelection = (value: AnyRecord): boolean =>
 export const getSelectionPlan = <T extends Entity, S extends Selection<T>, V extends View<T, S>>(
   viewComposition: V,
   ref: ViewRef<T['__typename']> | null,
+  options?: { includeNestedViews?: boolean },
 ): SelectionPlan => {
   const args = new Map<
     string,
@@ -102,7 +103,7 @@ export const getSelectionPlan = <T extends Entity, S extends Selection<T>, V ext
       }
 
       if (isViewTag(key)) {
-        if (!ref || (ref[ViewsTag] && ref[ViewsTag].has(key))) {
+        if (options?.includeNestedViews || !ref || ref[ViewsTag]?.has(key)) {
           walk((value as { select: AnyRecord }).select, prefix);
         }
         continue;

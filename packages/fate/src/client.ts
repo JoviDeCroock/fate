@@ -1314,7 +1314,7 @@ export class FateClient<
     }
 
     const entityId = toEntityId(type, id);
-    const plan = getSelectionPlan(view, ref);
+    const plan = getSelectionPlan(view, ref, { includeNestedViews: true });
     const key = this.liveSubscriptionKey(entityId, plan);
     const existing = this.liveSubscriptions.get(key);
     if (existing) {

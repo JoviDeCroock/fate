@@ -98,6 +98,12 @@ test('filters nested view selections based on ref tags', () => {
       "content",
     }
   `);
+
+  const TitleView = view<Post>()({ title: true });
+  const livePlan = getSelectionPlan({ ...PostView, ...TitleView }, refWithoutAuthor, {
+    includeNestedViews: true,
+  });
+  expect([...livePlan.paths].sort()).toEqual(['author.email', 'author.id', 'content']);
 });
 
 test('selection plan resolves arguments and hashes connection args', () => {

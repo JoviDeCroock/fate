@@ -168,6 +168,34 @@ test('live view subscriptions merge pushed records into the cache', () => {
   dispose();
 });
 
+test('live view subscriptions include fields selected by nested views', () => {
+  type Card = { __typename: 'Card'; id: string; title: string };
+  type Board = { __typename: 'Board'; cards: Array<Card>; id: string };
+
+  const CardView = view<Card>()({ id: true, title: true });
+  const BoardView = view<Board>()({ cards: { ...CardView }, id: true });
+  let livePaths: Iterable<string> = new Set();
+  const client = createClient({
+    roots: { board: clientRoot<Board, 'Board'>('Board') },
+    transport: {
+      async fetchById() {
+        return [];
+      },
+      subscribeById(_type, _id, paths) {
+        livePaths = paths;
+        return () => {};
+      },
+    },
+    types: [{ fields: { cards: { listOf: 'Card' } }, type: 'Board' }, { type: 'Card' }],
+  });
+
+  const boardRef = client.ref<Board>('Board', 'board-1', BoardView);
+  const dispose = client.subscribeLiveView(BoardView, boardRef);
+
+  expect([...livePaths].sort()).toEqual(['cards.id', 'cards.title', 'id']);
+  dispose();
+});
+
 test('live view subscriptions preserve cached scalars outside narrowed updates', () => {
   type LivePost = { __typename: 'Post'; id: string; likes: number; title: string };
 
