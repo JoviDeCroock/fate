@@ -217,7 +217,7 @@ export class Store {
   private rebase: Snapshots | undefined;
 
   constructor(
-    private readonly onRebase?: (ids: ReadonlySet<EntityId>) => void,
+    private readonly onRebase?: (ids: ReadonlySet<EntityId>, lists: ReadonlySet<string>) => void,
     private readonly onChange?: (change: StoreChange) => void,
   ) {}
 
@@ -281,7 +281,7 @@ export class Store {
           }
         }
         this.rebase = undefined;
-        this.onRebase?.(new Set(records.keys()));
+        this.onRebase?.(new Set(records.keys()), lists);
         for (const [id, paths] of records) {
           this.notify(id, paths, false);
         }
@@ -476,6 +476,11 @@ export class Store {
       lists: [...(this.listKeysByReferencedEntity.get(id) ?? [])],
       records: [...(this.recordReferencesByTarget.get(id)?.keys() ?? [])],
     };
+  }
+
+  /** @internal List keys whose result depends on this entity's coverage. */
+  getListKeysForEntity(id: EntityId): ReadonlyArray<string> {
+    return [...(this.listKeysByReferencedEntity.get(id) ?? [])];
   }
 
   /** @internal Read one confirmed record without copying the cache. */

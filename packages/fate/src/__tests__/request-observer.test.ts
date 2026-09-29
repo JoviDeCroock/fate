@@ -91,3 +91,98 @@ test('reuses request containers and only replaces the connection whose list chan
     unsubscribe();
   }
 });
+
+test('does not recheck unrelated request observers after an entity write', async () => {
+  type User = { __typename: 'User'; id: string; name: string };
+  const UserView = view<User>()({ id: true, name: true });
+  const client = createClient({
+    roots: { user: clientRoot<User, 'User'>('User') },
+    transport: { fetchById: async () => [] },
+    types: [{ type: 'User' }],
+  });
+  const observers = Array.from({ length: 300 }, (_, index) => {
+    const id = String(index);
+    client.write('User', { id, name: id }, new Set(['id', 'name']));
+    return client.observeRequest({ user: { id, view: UserView } }, { mode: 'cache-only' });
+  });
+  await Promise.resolve();
+  const unsubscribe = observers.map((observer) => observer.subscribe(() => {}));
+  for (const observer of observers) {
+    expect(observer.getSnapshot().status).toBe('ready');
+  }
+  const coverage = vi.spyOn(
+    client as unknown as { hasRequestData: () => boolean },
+    'hasRequestData',
+  );
+  client.write('User', { id: 'unrelated', name: 'Other' }, new Set(['id', 'name']));
+  await Promise.resolve();
+  expect(coverage).not.toHaveBeenCalled();
+  client.write('User', { id: '0', name: 'Updated' }, new Set(['id', 'name']));
+  await Promise.resolve();
+  expect(coverage).toHaveBeenCalledTimes(1);
+  unsubscribe.forEach((dispose) => dispose());
+});
+
+test('tracks new root-list items when they arrive before their entity fields', async () => {
+  type User = { __typename: 'User'; id: string; name: string };
+  const UserView = view<User>()({ id: true, name: true });
+  const client = createClient({
+    roots: { users: clientRoot<Array<User>, 'User'>('User') },
+    transport: {
+      fetchById: async () => [],
+      fetchList: async () => ({
+        items: [],
+        pagination: { hasNext: false, hasPrevious: false },
+      }),
+    },
+    types: [{ type: 'User' }],
+  });
+  const request = { users: { list: { items: { node: UserView } } } };
+  await client.request(request);
+  const observer = client.observeRequest(request, { mode: 'cache-only' });
+  const unsubscribe = observer.subscribe(() => {});
+  expect(observer.getSnapshot().status).toBe('ready');
+  client.store.setList('users', {
+    ids: ['User:1'],
+    pagination: { hasNext: false, hasPrevious: false },
+  });
+  await Promise.resolve();
+  expect(observer.getSnapshot().status).toBe('missing');
+  client.write('User', { id: '1', name: 'Ada' }, new Set(['id', 'name']));
+  await Promise.resolve();
+  expect(observer.getSnapshot().status).toBe('ready');
+  unsubscribe();
+});
+
+test('moves query observers to the new root entity when its result changes', async () => {
+  type User = { __typename: 'User'; id: string; name: string };
+  const UserView = view<User>()({ id: true, name: true });
+  const fetchQuery = vi
+    .fn()
+    .mockResolvedValueOnce({ id: '1', name: 'First' })
+    .mockResolvedValueOnce({ id: '2', name: 'Second' });
+  const client = createClient({
+    roots: { viewer: clientRoot<User, 'User'>('User') },
+    transport: { fetchById: async () => [], fetchQuery },
+    types: [{ type: 'User' }],
+  });
+  const request = { viewer: { view: UserView } };
+  await client.request(request);
+  const observer = client.observeRequest(request, { mode: 'cache-only' });
+  const unsubscribe = observer.subscribe(() => {});
+  expect(observer.getSnapshot().data?.viewer).toMatchObject({ id: '1' });
+  await client.request(request, { mode: 'network-only' });
+  await Promise.resolve();
+  expect(observer.getSnapshot().data?.viewer).toMatchObject({ id: '2' });
+  const coverage = vi.spyOn(
+    client as unknown as { hasRequestData: () => boolean },
+    'hasRequestData',
+  );
+  client.write('User', { id: '1', name: 'Old' }, new Set(['id', 'name']));
+  await Promise.resolve();
+  expect(coverage).not.toHaveBeenCalled();
+  client.write('User', { id: '2', name: 'New' }, new Set(['id', 'name']));
+  await Promise.resolve();
+  expect(coverage).toHaveBeenCalledTimes(1);
+  unsubscribe();
+});

@@ -484,7 +484,12 @@ export class FateClient<
     return actualType;
   }
 
-  private readonly requestListeners = new Set<() => void>();
+  private readonly requestListeners = new Map<
+    () => void,
+    { dependencies: Set<string>; descriptor: RequestDescriptor }
+  >();
+  private readonly requestListenersByDependency = new Map<string, Set<() => void>>();
+  private readonly pendingRequestListeners = new Set<() => void>();
   private requestNotificationScheduled = false;
   private readonly cacheOnlyRefs = new WeakSet<object>();
   private readonly cacheOnlyCopies = new WeakMap<object, object>();
@@ -528,12 +533,18 @@ export class FateClient<
   private readonly persistenceDisposal?: AbortController;
   private readonly persistenceRuntime?: PersistenceRuntime;
   readonly store = new Store(
-    (ids) => {
+    (ids, lists) => {
       for (const id of ids) {
         this.viewDataCache.invalidate(id);
       }
       this.runPendingGarbageCollection();
-      this.notifyRequests();
+      this.notifyRequests([
+        ...[...ids].map((id) => `entity:${id}`),
+        ...[...lists].map((key) => `list:${key}`),
+        ...[...ids].flatMap((id) =>
+          this.store.getListKeysForEntity(id).map((key) => `list:${key}`),
+        ),
+      ]);
     },
     (change) => {
       if (!this.store.isRecordingOptimistic) {
@@ -551,7 +562,14 @@ export class FateClient<
         }
       }
       this.persistenceRuntime?.changed(change);
-      this.notifyRequests();
+      this.notifyRequests(
+        change.kind === 'record'
+          ? [
+              `entity:${change.key}`,
+              ...this.store.getListKeysForEntity(change.key).map((key) => `list:${key}`),
+            ]
+          : [`list:${change.key}`],
+      );
     },
   );
   private readonly operationLifetime: OperationLifetime;
@@ -2222,14 +2240,78 @@ export class FateClient<
     return this.store.getListState(connection.key);
   }
 
-  private notifyRequests() {
+  private requestDependencies(request: RequestDescriptor): Set<string> {
+    const dependencies = new Set<string>();
+    for (const item of request.items) {
+      if (item.kind === 'node' || item.kind === 'nodes') {
+        for (const id of item.ids) {
+          dependencies.add(`entity:${toEntityId(item.type, id)}`);
+        }
+      } else if (item.kind === 'query') {
+        dependencies.add(`root:${item.queryKey}`);
+        const entityId = this.rootRequests.get(item.queryKey);
+        if (entityId) {
+          dependencies.add(`entity:${entityId}`);
+        }
+      } else if (item.kind === 'value') {
+        dependencies.add(`root:${item.queryKey}`);
+      } else if (item.kind === 'list') {
+        dependencies.add(`list:${item.listKey}`);
+      }
+    }
+    return dependencies;
+  }
+
+  private updateRequestListenerDependencies(listener: () => void) {
+    const entry = this.requestListeners.get(listener);
+    if (!entry) {
+      return;
+    }
+    const next = this.requestDependencies(entry.descriptor);
+    for (const dependency of entry.dependencies) {
+      if (!next.has(dependency)) {
+        const listeners = this.requestListenersByDependency.get(dependency);
+        listeners?.delete(listener);
+        if (!listeners?.size) {
+          this.requestListenersByDependency.delete(dependency);
+        }
+      }
+    }
+    for (const dependency of next) {
+      if (!entry.dependencies.has(dependency)) {
+        let listeners = this.requestListenersByDependency.get(dependency);
+        if (!listeners) {
+          listeners = new Set();
+          this.requestListenersByDependency.set(dependency, listeners);
+        }
+        listeners.add(listener);
+      }
+    }
+    entry.dependencies = next;
+  }
+
+  private notifyRequests(dependencies: Iterable<string>) {
+    for (const dependency of dependencies) {
+      for (const listener of this.requestListenersByDependency.get(dependency) ?? []) {
+        this.pendingRequestListeners.add(listener);
+      }
+    }
+    if (this.pendingRequestListeners.size === 0) {
+      return;
+    }
     if (this.requestNotificationScheduled) {
       return;
     }
     this.requestNotificationScheduled = true;
     queueMicrotask(() => {
       this.requestNotificationScheduled = false;
-      for (const listener of this.requestListeners) {
+      const listeners = [...this.pendingRequestListeners];
+      this.pendingRequestListeners.clear();
+      for (const listener of listeners) {
+        this.updateRequestListenerDependencies(listener);
+        if (!this.requestListeners.has(listener)) {
+          continue;
+        }
         listener();
       }
     });
@@ -2325,9 +2407,19 @@ export class FateClient<
           { persist: options.persist },
         ),
       subscribe: (listener) => {
-        this.requestListeners.add(listener);
+        this.requestListeners.set(listener, { dependencies: new Set(), descriptor });
+        this.updateRequestListenerDependencies(listener);
         return () => {
+          const entry = this.requestListeners.get(listener);
           this.requestListeners.delete(listener);
+          this.pendingRequestListeners.delete(listener);
+          for (const dependency of entry?.dependencies ?? []) {
+            const listeners = this.requestListenersByDependency.get(dependency);
+            listeners?.delete(listener);
+            if (!listeners?.size) {
+              this.requestListenersByDependency.delete(dependency);
+            }
+          }
         };
       },
     });
@@ -2670,8 +2762,8 @@ export class FateClient<
         : execute(),
     );
     void handle.then(
-      () => this.notifyRequests(),
-      () => this.notifyRequests(),
+      () => this.notifyRequests(this.requestDependencies(handle.descriptor)),
+      () => this.notifyRequests(this.requestDependencies(handle.descriptor)),
     );
   }
 
@@ -2782,8 +2874,8 @@ export class FateClient<
 
     const result = this.getRequestResultFromDescriptor(request) as RequestResult<Roots, R>;
     void this.executeRequest(request, options).then(
-      () => this.notifyRequests(),
-      () => this.notifyRequests(),
+      () => this.notifyRequests(this.requestDependencies(request)),
+      () => this.notifyRequests(this.requestDependencies(request)),
     );
     return result;
   }
