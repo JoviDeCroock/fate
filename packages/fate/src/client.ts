@@ -78,6 +78,7 @@ import {
   isViewTag,
   ViewResult,
   ViewsTag,
+  ViewPayload,
   type AnyRecord,
   type CheckedRequest,
   type Deferred,
@@ -99,7 +100,7 @@ import {
   MutationDefinition,
   RootDefinition,
 } from './types.ts';
-import { getViewNames, getViewPayloads } from './view.ts';
+import { addViewName, getViewNames, getViewPayloads, resolveView } from './view.ts';
 
 /**
  * Strategy used when resolving a request.
@@ -1081,6 +1082,7 @@ export class FateClient<
     view: V,
     ref: ViewRef<T['__typename']>,
   ): FateThenable<ViewSnapshot<T, S>> {
+    view = resolveView(view, ref);
     if (this.persistence && this.persistence.getSnapshot().status !== 'ready') {
       const key = `restore:${ref.__typename}:${ref.id}:${[...getViewNames(view)].sort().join(',')}`;
       let pending = this.pending.get(key);
@@ -1377,6 +1379,7 @@ export class FateClient<
     view: V,
     ref: ViewRef<T['__typename']>,
   ): () => void {
+    view = resolveView(view, ref);
     this.assertPersistenceActive();
     this.assertLiveViewSupport();
 
@@ -3550,7 +3553,7 @@ export class FateClient<
             assignViewTag(target, new Set());
           }
 
-          target[ViewsTag]!.add(key);
+          addViewName(target[ViewsTag]!, key, rawSelection as ViewPayload<any, any>);
           continue;
         }
 

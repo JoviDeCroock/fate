@@ -1,4 +1,6 @@
+import { cloneArgs, hashArgs } from './args.ts';
 import type {
+  AnyRecord,
   Entity,
   Selection,
   ValidateSelection,
@@ -15,6 +17,45 @@ type MutableSelection<T extends Entity, S extends Selection<T>> = {
   ? Mutable
   : never;
 
+const ParameterizedViewTag = Symbol('fate.parameterized-view');
+const boundViews = new WeakMap<ViewPayload<any, any>, View<any, any>>();
+const namePayloads = new WeakMap<ReadonlySet<string>, Map<string, ViewPayload<any, any>>>();
+
+export type ParameterizedView<T extends Entity, P extends AnyRecord, S extends Selection<T>> = View<
+  T,
+  S
+> &
+  ((parameters: P) => View<T, S>);
+
+export const addViewName = (names: Set<string>, name: string, payload: ViewPayload<any, any>) => {
+  names.add(name);
+  let payloads = namePayloads.get(names);
+  if (!payloads) {
+    payloads = new Map();
+    namePayloads.set(names, payloads);
+  }
+  payloads.set(name, payload);
+};
+
+/** Resolve a definition using the binding carried by its ref, never ambient parameters. */
+export const resolveView = <V extends View<any, any>>(view: V, ref: ViewRef<string> | null): V => {
+  if (typeof view !== 'function' || !(ParameterizedViewTag in view)) {
+    return view;
+  }
+  const definition = view[ParameterizedViewTag];
+  const matches = [...(namePayloads.get(ref?.[ViewsTag] ?? new Set())?.values() ?? [])].filter(
+    (payload) => payload.definition === definition,
+  );
+  if (matches.length !== 1) {
+    throw new Error(
+      matches.length
+        ? 'fate: Multiple bindings for this view are ambiguous. Use named fragment aliases.'
+        : 'fate: Bind the view parameters before creating a request or ref.',
+    );
+  }
+  return boundViews.get(matches[0]) as V;
+};
+
 /**
  * Collects all view payloads that apply to the given ref.
  */
@@ -22,6 +63,7 @@ export const getViewPayloads = <T extends Entity, S extends Selection<T>, V exte
   view: V,
   ref: ViewRef<T['__typename']> | null,
 ): ReadonlyArray<ViewPayload<T, S>> => {
+  view = resolveView(view, ref);
   const result: Array<ViewPayload<T, S>> = [];
   for (const [key, value] of Object.entries(view)) {
     if (isViewTag(key) && (!ref || ref[ViewsTag]?.has(key))) {
@@ -36,11 +78,12 @@ export const getViewPayloads = <T extends Entity, S extends Selection<T>, V exte
  */
 export const getViewNames = <T extends Entity, S extends Selection<T>, V extends View<T, S>>(
   view: V,
-): ReadonlySet<ViewTag> => {
+): Set<ViewTag> => {
+  view = resolveView(view, null);
   const result = new Set<ViewTag>();
-  for (const key of Object.keys(view)) {
+  for (const [key, payload] of Object.entries(view)) {
     if (isViewTag(key)) {
-      result.add(key);
+      addViewName(result, key, payload);
     }
   }
   return result;
@@ -51,7 +94,7 @@ export const getViewNames = <T extends Entity, S extends Selection<T>, V extends
  */
 export const getSelectionViewNames = <T extends Entity, S extends Selection<T>>(
   selection: S,
-): ReadonlySet<ViewTag> => {
+): Set<ViewTag> => {
   return getViewNames(selection as unknown as View<T, S>);
 };
 
@@ -108,21 +151,30 @@ const getStableId = () => {
 export function view<T extends Entity>() {
   const viewId = getStableId();
 
-  return <const S extends Selection<T>>(
+  function define<const S extends Selection<T>>(
     select: S & ValidateSelection<T, S>,
-  ): View<T, MutableSelection<T, S>> => {
-    const payload = Object.freeze({
-      select,
-      [ViewKind]: true,
-    }) as ViewPayload<T, S>;
-
-    const viewComposition = Object.defineProperty({}, getViewTag(viewId), {
-      configurable: false,
-      enumerable: true,
-      value: payload,
-      writable: false,
-    });
-
-    return Object.freeze(viewComposition) as View<T, MutableSelection<T, S>>;
-  };
+  ): View<T, MutableSelection<T, S>>;
+  function define<P extends AnyRecord, const S extends Selection<T>>(
+    select: (parameters: P) => S & ValidateSelection<T, S>,
+  ): ParameterizedView<T, P, MutableSelection<T, S>>;
+  function define(select: Selection<T> | ((parameters: AnyRecord) => Selection<T>)) {
+    const create = (select: Selection<T>, tag: ViewTag, definition?: string) => {
+      const payload = Object.freeze({ definition, select, [ViewKind]: true }) as ViewPayload<T>;
+      const composition = Object.freeze({ [tag]: payload });
+      boundViews.set(payload, composition);
+      return composition;
+    };
+    const tag = getViewTag(viewId);
+    if (typeof select === 'function') {
+      const bind = (parameters: AnyRecord) => {
+        const cloned = cloneArgs(parameters, 'parameters');
+        const key = hashArgs(cloned);
+        return create(select(cloned), getViewTag(`${viewId}:${key}`), tag);
+      };
+      Object.defineProperty(bind, ParameterizedViewTag, { value: tag });
+      return Object.freeze(bind);
+    }
+    return create(select, tag);
+  }
+  return define;
 }

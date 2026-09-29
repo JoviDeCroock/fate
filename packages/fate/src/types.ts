@@ -283,6 +283,7 @@ export type SelectionOf<V> = V extends {
 
 /** View payload stored on a view tag containing the raw selection used to mask data. */
 export type ViewPayload<T extends Entity, S extends Selection<T> = Selection<T>> = Readonly<{
+  definition?: string;
   select: S;
   [ViewKind]: true;
 }>;

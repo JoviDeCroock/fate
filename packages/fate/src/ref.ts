@@ -6,9 +6,11 @@ import {
   TypeName,
   View,
   ViewRef,
+  ViewPayload,
+  isViewTag,
   ViewsTag,
 } from './types.ts';
-import { getSelectionViewNames, getViewNames, getViewPayloads } from './view.ts';
+import { addViewName, getViewNames, getViewPayloads } from './view.ts';
 
 /**
  * Builds the canonical cache ID for an entity.
@@ -37,11 +39,13 @@ export function assignViewTag(target: AnyRecord, value: ReadonlySet<string>) {
 }
 
 export const getRootViewNames = (view: View<any, any>) => {
-  const names = new Set<string>(getViewNames(view));
+  const names = getViewNames(view);
   const payloads = getViewPayloads(view, null);
   for (const payload of payloads) {
-    for (const name of getSelectionViewNames(payload.select)) {
-      names.add(name);
+    for (const [name, value] of Object.entries(payload.select)) {
+      if (isViewTag(name)) {
+        addViewName(names, name, value as ViewPayload<any, any>);
+      }
     }
   }
   return names;

@@ -227,7 +227,7 @@ export const createRequestDescriptor = (
         kind: 'node',
         name,
         plan: getSelectionPlan(item.view, null),
-        refViewNames: new Set(getViewNames(item.view)),
+        refViewNames: getViewNames(item.view),
         type,
         viewSignature: getViewSignature(item.view),
       });
@@ -240,7 +240,7 @@ export const createRequestDescriptor = (
         kind: 'nodes',
         name,
         plan: getSelectionPlan(item.view, null),
-        refViewNames: new Set(getViewNames(item.view)),
+        refViewNames: getViewNames(item.view),
         type,
         viewSignature: getViewSignature(item.view),
       });

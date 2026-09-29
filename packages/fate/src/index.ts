@@ -86,7 +86,7 @@ export { isRecord } from './record.ts';
 export { mutation, valueMutation } from './mutation.ts';
 export { clientRoot, clientValueRoot } from './root.ts';
 export { toEntityId } from './ref.ts';
-export { view } from './view.ts';
+export { view, type ParameterizedView } from './view.ts';
 
 export type {
   PersistedMutationStatus,
