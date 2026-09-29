@@ -276,3 +276,93 @@ const PostDetail = ({ post: postRef }: { post: ViewRef<'Post'> }) => {
 ```
 
 ViewRefs carry a set of view names they can resolve. `useView` throws if a ref does not include the required view.
+
+## Parameters and Conditional Selections
+
+A view can take parameters. Define the selection with a function, then bind its parameters where you request or compose the view:
+
+```tsx
+import { alias, useRequest, useView, view, when, type ViewRef } from 'react-fate';
+import type { User } from '@your-org/server/views';
+
+const AccountView = view<User>()({ email: true });
+
+const ProfileView = view<User>()(({ isViewer }: { isViewer: boolean }) => ({
+  name: true,
+  account: when(isViewer, alias(AccountView)),
+}));
+
+function Profile({ userId, isViewer }: { userId: string; isViewer: boolean }) {
+  const { user } = useRequest({
+    user: { id: userId, view: ProfileView({ isViewer }) },
+  });
+  const profile = useView(ProfileView, user);
+  const account = useView(AccountView, profile.account);
+
+  return (
+    <div>
+      <h2>{profile.name}</h2>
+      {account && <p>{account.email}</p>}
+    </div>
+  );
+}
+```
+
+`alias(AccountView)` gives the selection a named ref to the **same User**. The name `account` belongs to your result; it does not need to exist in the server schema. Read the ref with `useView` to access the fragment's selected fields. The existing `alias('field', selection)` form still selects a schema field under another name.
+
+`when(condition, selection)` works with named fragments and ordinary fields:
+
+```tsx
+const ProfileView = view<User>()(({ isViewer }: { isViewer: boolean }) => ({
+  name: true,
+  email: when(isViewer, true),
+}));
+```
+
+A false condition returns `undefined` and excludes that branch from fetching and subscriptions, even if its data is already cached. A selected field whose server value is `null` still returns `null`. TypeScript preserves that distinction: a boolean condition adds `undefined` to the result type; literal `true` keeps the selected type; literal `false` produces `undefined`.
+
+Both `useView` and `useLiveView` accept `undefined` refs and return `undefined` without fetching or subscribing. Call the hooks unconditionally, as in the example above.
+
+### Carrying Parameters with Refs
+
+Bindings travel with refs. Child components read the view definition without reconstructing its parameters:
+
+```tsx
+const LocalizedNameView = view<User>()(({ locale }: { locale: string }) => ({
+  name: { args: { locale } },
+}));
+
+const NamesView = view<User>()({
+  english: alias(LocalizedNameView({ locale: 'en' })),
+  japanese: alias(LocalizedNameView({ locale: 'ja' })),
+});
+
+function Names({ user }: { user: ViewRef<'User'> }) {
+  const names = useView(NamesView, user);
+  const english = useView(LocalizedNameView, names.english);
+  const japanese = useView(LocalizedNameView, names.japanese);
+
+  return (
+    <p>
+      {english.name} / {japanese.name}
+    </p>
+  );
+}
+```
+
+This example assumes the server's `name` field accepts a `locale` argument. The two refs identify the same entity with independent bindings. Connections inside named views likewise keep their own arguments and pagination state.
+
+Declare view definitions at module scope. Binding an equivalent parameter object again preserves the logical request and ref identity; no `useMemo` is needed. Parameter objects use the same serializable values as field arguments, and fate snapshots them when binding. Keep selection functions pure, with all varying inputs passed as parameters.
+
+Bind a parameterized definition before using it in a request, nested selection, alias, or spread. If a single ref contains multiple bindings of one definition, use named aliases to give each binding its own ref. Conditional anonymous spreads are not supported; use `when(condition, alias(View))` instead.
+
+### Vue
+
+The same `view`, `alias`, and `when` API is available from `vue-fate`. Pass reactive refs or getters to the view composables:
+
+```ts
+const profile = useView(ProfileView, () => request.value?.user);
+const account = useView(AccountView, () => profile.value?.account);
+```
+
+When the ref is `undefined`, the resource's value and `ready()` result are `undefined`, and the view has no active subscriptions.
