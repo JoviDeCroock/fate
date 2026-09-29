@@ -97,3 +97,5 @@ export type {
 } from './persistence-types.ts';
 
 export type { GraphQLArgumentSchema } from './graphqlSchema.ts';
+
+export { GraphQLRequestError, type GraphQLErrorPayload } from './graphql-error.ts';

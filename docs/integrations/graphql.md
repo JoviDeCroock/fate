@@ -414,3 +414,16 @@ const MapView = view<Map>()({
 At runtime the transport checks selected field names, argument names, enum values, required inputs, built-in scalar types, and nested input objects before issuing an HTTP request. Custom scalar values have TypeScript type `unknown` and remain subject to server validation. These contracts cover arguments; they do not add support for GraphQL result shapes that the transport otherwise does not support.
 
 For a manually constructed transport, extract metadata on the build/server side with `createGraphQLArgumentSchema` from `@nkzw/fate/vite`, then pass the serialized result as the transport's `schema` option. Keep that build-time helper out of browser modules.
+
+## Errors and Partial Results
+
+A failed GraphQL operation rejects with `GraphQLRequestError`. It preserves all
+GraphQL `errors`, the first error's `path` and `extensions`, and the HTTP `status`
+when available. HTTP errors use the same error type; network failures retain the
+original fetch error.
+
+Partial response data is available as `error.data` for explicit application
+handling. It is unnormalized diagnostic data, not a successful typed result, and
+fate does not write it to the cache. Successful sibling operations in the same
+batch still resolve normally, including legitimate `null` results. Mutation
+functions retain their `{ result, error }` result contract.

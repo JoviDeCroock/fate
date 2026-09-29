@@ -113,7 +113,10 @@ test('isolates mapped refetch errors from other operations in the same batch', a
     transport.fetchById('User', ['error'], new Set(['name'])),
     transport.fetchById('User', ['1'], new Set(['name'])),
   ]);
-  expect(results[0]).toMatchObject({ reason: new Error('Refetch failed'), status: 'rejected' });
+  expect(results[0]).toMatchObject({
+    reason: { message: 'Refetch failed', name: 'GraphQLRequestError' },
+    status: 'rejected',
+  });
   expect(results[1]).toMatchObject({ status: 'fulfilled', value: [{ id: '1' }] });
   expect(fetch).toHaveBeenCalledTimes(1);
 });

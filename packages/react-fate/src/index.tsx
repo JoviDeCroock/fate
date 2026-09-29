@@ -15,6 +15,7 @@ export {
   createTRPCTransport,
   defer,
   graphqlMutation,
+  GraphQLRequestError,
   mutation,
   toEntityId,
   type ConnectionRef,

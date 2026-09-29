@@ -1,3 +1,4 @@
+import { GraphQLRequestError, type GraphQLErrorPayload } from './graphql-error.ts';
 import {
   graphQLOutputRelations,
   validateGraphQLArguments,
@@ -115,12 +116,6 @@ export type GraphQLTransportOptions<
 type GraphQLResponse = {
   data?: unknown;
   errors?: Array<GraphQLErrorPayload>;
-};
-
-type GraphQLErrorPayload = {
-  extensions?: AnyRecord;
-  message?: string;
-  path?: ReadonlyArray<number | string>;
 };
 
 type PendingOperation = {
@@ -243,30 +238,23 @@ const defaultDecodeNodeId = (type: string, id: string | number): string | number
   return id.startsWith(prefix) ? id.slice(prefix.length) : id;
 };
 
-const errorCodeFromGraphQL = (error: { extensions?: AnyRecord } | undefined) => {
-  const code = error?.extensions?.code;
-  return typeof code === 'string' ? code : 'INTERNAL_ERROR';
-};
-
 const responseError = async (response: Response): Promise<Error> => {
   let message = response.statusText || `HTTP ${response.status}`;
   try {
-    const payload = (await response.clone().json()) as GraphQLResponse;
-    if (payload.errors?.[0]?.message) {
-      message = payload.errors[0].message;
-    }
+    const payload = assertGraphQLResponse(await response.clone().json());
+    return new GraphQLRequestError(payload.errors ?? [], {
+      data: payload.data,
+      message,
+      status: response.status,
+    });
   } catch {
     try {
-      const text = await response.text();
-      if (text) {
-        message = text;
-      }
+      message = (await response.text()) || message;
     } catch {
-      // Keep the status text fallback.
+      // Keep the HTTP status fallback when the response body cannot be read.
     }
   }
-
-  return new Error(message);
+  return new GraphQLRequestError([], { message, status: response.status });
 };
 
 const assertGraphQLResponse = (value: unknown): GraphQLResponse => {
@@ -630,12 +618,8 @@ const graphQLRequest = async ({
   return {
     data: isRecord(payload.data) ? payload.data : {},
     errors: payload.errors ?? [],
+    status: response.status,
   };
-};
-
-const graphQLError = (error: GraphQLErrorPayload | undefined): Error => {
-  const code = errorCodeFromGraphQL(error);
-  return new Error(error?.message ?? `GraphQL ${code}`);
 };
 
 const reportExecutionError = (
@@ -646,7 +630,7 @@ const reportExecutionError = (
     return false;
   }
 
-  handlers.onError?.(new Error(result.errors[0]?.message ?? 'GraphQL subscription error.'));
+  handlers.onError?.(new GraphQLRequestError(result.errors));
   return true;
 };
 
@@ -790,7 +774,7 @@ export function createGraphQLTransport<
             ([name, variable]) => `$${name}: ${variable.type}`,
           );
           const variableDefinitions = definitions.length ? `(${definitions.join(', ')})` : '';
-          const { data, errors } = await graphQLRequest({
+          const { data, errors, status } = await graphQLRequest({
             fetchImpl,
             headers,
             query: `${kind} Fate${kind === 'query' ? 'Query' : 'Mutation'}${variableDefinitions} { ${operations
@@ -819,13 +803,15 @@ export function createGraphQLTransport<
           }
 
           if (globalErrors.length) {
-            throw graphQLError(globalErrors[0]);
+            throw new GraphQLRequestError(errors, { data, status });
           }
 
           for (const operation of operations) {
             const operationErrors = errorsByAlias.get(operation.alias);
             if (operationErrors?.length) {
-              operation.reject(graphQLError(operationErrors[0]));
+              operation.reject(
+                new GraphQLRequestError(operationErrors, { data: data[operation.alias], status }),
+              );
               continue;
             }
 
