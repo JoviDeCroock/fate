@@ -8,6 +8,7 @@ import {
   type ViewRef,
   type ViewSelection,
   isDeferred,
+  resolveView,
 } from '@nkzw/fate';
 import { onScopeDispose, toValue, watch, type MaybeRefOrGetter } from 'vue';
 import { getFateClientSource, useFateClient } from './context.ts';
@@ -20,25 +21,36 @@ type ViewEntityWithTypename<V extends View<any, any>> = ViewEntity<V> & {
 /**
  * Resolves a reference against a view and subscribes to live server updates for that selection.
  */
-export function useLiveView<V extends View<any, any>, R extends ViewRef<ViewEntityName<V>> | null>(
-  view: V,
-  ref: MaybeRefOrGetter<R>,
-): ViewResource<R extends null ? null : ViewData<ViewEntityWithTypename<V>, ViewSelection<V>>>;
 export function useLiveView<
   V extends View<any, any>,
-  R extends Deferred<ViewRef<ViewEntityName<V>>> | null,
+  R extends ViewRef<ViewEntityName<V>> | null | undefined,
 >(
   view: V,
   ref: MaybeRefOrGetter<R>,
-): ViewResource<R extends null ? null : ViewData<ViewEntityWithTypename<V>, ViewSelection<V>>>;
+): ViewResource<
+  R extends null | undefined ? R : ViewData<ViewEntityWithTypename<V>, ViewSelection<V>>
+>;
+export function useLiveView<
+  V extends View<any, any>,
+  R extends Deferred<ViewRef<ViewEntityName<V>>> | null | undefined,
+>(
+  view: V,
+  ref: MaybeRefOrGetter<R>,
+): ViewResource<
+  R extends null | undefined ? R : ViewData<ViewEntityWithTypename<V>, ViewSelection<V>>
+>;
 export function useLiveView<V extends View<any, any>>(
   view: V,
-  ref: MaybeRefOrGetter<Deferred<ViewRef<ViewEntityName<V>>> | ViewRef<ViewEntityName<V>> | null>,
-): ViewResource<ViewData<ViewEntityWithTypename<V>, ViewSelection<V>> | null>;
+  ref: MaybeRefOrGetter<
+    Deferred<ViewRef<ViewEntityName<V>>> | ViewRef<ViewEntityName<V>> | null | undefined
+  >,
+): ViewResource<ViewData<ViewEntityWithTypename<V>, ViewSelection<V>> | null | undefined>;
 export function useLiveView<V extends View<any, any>>(
   view: V,
-  ref: MaybeRefOrGetter<Deferred<ViewRef<ViewEntityName<V>>> | ViewRef<ViewEntityName<V>> | null>,
-): ViewResource<ViewData<ViewEntityWithTypename<V>, ViewSelection<V>> | null> {
+  ref: MaybeRefOrGetter<
+    Deferred<ViewRef<ViewEntityName<V>>> | ViewRef<ViewEntityName<V>> | null | undefined
+  >,
+): ViewResource<ViewData<ViewEntityWithTypename<V>, ViewSelection<V>> | null | undefined> {
   const clientSource = getFateClientSource(useFateClient());
   const viewResource = useView(view, ref);
   let liveUnsubscribe: (() => void) | undefined;
@@ -53,13 +65,13 @@ export function useLiveView<V extends View<any, any>>(
   const resolveRef = async () => {
     const currentRef = toValue(ref);
     if (!isDeferred(currentRef)) {
-      return currentRef as ViewRef<ViewEntityName<V>> | null;
+      return currentRef as ViewRef<ViewEntityName<V>> | null | undefined;
     }
 
     return (
       (await clientSource.value.readDeferred(
         currentRef as Deferred<ViewRef<ViewEntityName<V>>>,
-      )) as DeferredSnapshot<ViewRef<ViewEntityName<V>> | null>
+      )) as DeferredSnapshot<ViewRef<ViewEntityName<V>> | null | undefined>
     ).data;
   };
 
@@ -77,7 +89,7 @@ export function useLiveView<V extends View<any, any>>(
         client.assertLiveViewSupport();
         liveUnsubscribe = client.subscribeLiveView(
           view,
-          client.ref(resolvedRef.__typename, resolvedRef.id, view),
+          client.ref(resolvedRef.__typename, resolvedRef.id, resolveView(view, resolvedRef)),
         );
       })
       .catch((error: unknown) => {

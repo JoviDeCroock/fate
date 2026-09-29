@@ -2,6 +2,7 @@ import {
   Deferred,
   DeferredSnapshot,
   isDeferred,
+  resolveView,
   View,
   ViewData,
   ViewEntity,
@@ -24,29 +25,35 @@ type ViewEntityWithTypename<V extends View<any, any>> = ViewEntity<V> & {
  * @example
  * const post = useLiveView(PostView, postRef);
  */
-export function useLiveView<V extends View<any, any>, R extends ViewRef<ViewEntityName<V>> | null>(
-  view: V,
-  ref: R,
-): R extends null ? null : ViewData<ViewEntityWithTypename<V>, ViewSelection<V>>;
 export function useLiveView<
   V extends View<any, any>,
-  R extends Deferred<ViewRef<ViewEntityName<V>>> | null,
->(view: V, ref: R): R extends null ? null : ViewData<ViewEntityWithTypename<V>, ViewSelection<V>>;
+  R extends ViewRef<ViewEntityName<V>> | null | undefined,
+>(
+  view: V,
+  ref: R,
+): R extends null | undefined ? R : ViewData<ViewEntityWithTypename<V>, ViewSelection<V>>;
+export function useLiveView<
+  V extends View<any, any>,
+  R extends Deferred<ViewRef<ViewEntityName<V>>> | null | undefined,
+>(
+  view: V,
+  ref: R,
+): R extends null | undefined ? R : ViewData<ViewEntityWithTypename<V>, ViewSelection<V>>;
 export function useLiveView<V extends View<any, any>>(
   view: V,
-  ref: Deferred<ViewRef<ViewEntityName<V>>> | ViewRef<ViewEntityName<V>> | null,
-): ViewData<ViewEntityWithTypename<V>, ViewSelection<V>> | null {
+  ref: Deferred<ViewRef<ViewEntityName<V>>> | ViewRef<ViewEntityName<V>> | null | undefined,
+): ViewData<ViewEntityWithTypename<V>, ViewSelection<V>> | null | undefined {
   const client = useFateClient();
   const resolvedRef = isDeferred(ref)
     ? (
-        use(
-          client.readDeferred(ref as Deferred<ViewRef<ViewEntityName<V>>>),
-        ) as DeferredSnapshot<ViewRef<ViewEntityName<V>> | null>
+        use(client.readDeferred(ref as Deferred<ViewRef<ViewEntityName<V>>>)) as DeferredSnapshot<
+          ViewRef<ViewEntityName<V>> | null | undefined
+        >
       ).data
-    : (ref as ViewRef<ViewEntityName<V>> | null);
-  const liveRef = resolvedRef ? client.ref(resolvedRef.__typename, resolvedRef.id, view) : null;
-  const liveId = liveRef?.id;
-  const liveType = liveRef?.__typename;
+    : (ref as ViewRef<ViewEntityName<V>> | null | undefined);
+  const liveRef = resolvedRef
+    ? client.ref(resolvedRef.__typename, resolvedRef.id, resolveView(view, resolvedRef))
+    : null;
 
   const subscribeLiveView = useEffectEvent(() => {
     if (liveRef === null) {
@@ -57,10 +64,10 @@ export function useLiveView<V extends View<any, any>>(
     return client.subscribeLiveView(view, liveRef);
   });
 
-  useEffect(() => subscribeLiveView(), [client, view, liveId, liveType]);
+  useEffect(() => subscribeLiveView(), [client, view, liveRef]);
 
   return useView(
     view,
-    ref as Deferred<ViewRef<ViewEntityName<V>>> | ViewRef<ViewEntityName<V>> | null,
+    ref as Deferred<ViewRef<ViewEntityName<V>>> | ViewRef<ViewEntityName<V>> | null | undefined,
   );
 }

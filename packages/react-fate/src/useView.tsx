@@ -3,6 +3,7 @@ import {
   EntityId,
   FateThenable,
   isDeferred,
+  resolveView,
   View,
   ViewData,
   ViewEntity,
@@ -19,6 +20,8 @@ import { fulfilledThenable, isFulfilledThenable } from './thenable.ts';
 type ViewEntityWithTypename<V extends View<any, any>> = ViewEntity<V> & {
   __typename: ViewEntityName<V>;
 };
+
+const undefinedSnapshot = fulfilledThenable(undefined);
 
 const nullSnapshot = {
   status: 'fulfilled',
@@ -37,22 +40,28 @@ const nullSnapshot = {
  * @example
  * const post = useView(PostView, postRef);
  */
-export function useView<V extends View<any, any>, R extends ViewRef<ViewEntityName<V>> | null>(
-  view: V,
-  ref: R,
-): R extends null ? null : ViewData<ViewEntityWithTypename<V>, ViewSelection<V>>;
 export function useView<
   V extends View<any, any>,
-  R extends Deferred<ViewRef<ViewEntityName<V>>> | null,
->(view: V, ref: R): R extends null ? null : ViewData<ViewEntityWithTypename<V>, ViewSelection<V>>;
+  R extends ViewRef<ViewEntityName<V>> | null | undefined,
+>(
+  view: V,
+  ref: R,
+): R extends null | undefined ? R : ViewData<ViewEntityWithTypename<V>, ViewSelection<V>>;
+export function useView<
+  V extends View<any, any>,
+  R extends Deferred<ViewRef<ViewEntityName<V>>> | null | undefined,
+>(
+  view: V,
+  ref: R,
+): R extends null | undefined ? R : ViewData<ViewEntityWithTypename<V>, ViewSelection<V>>;
 export function useView<V extends View<any, any>>(
   view: V,
-  ref: Deferred<ViewRef<ViewEntityName<V>>> | ViewRef<ViewEntityName<V>> | null,
-): ViewData<ViewEntityWithTypename<V>, ViewSelection<V>> | null;
+  ref: Deferred<ViewRef<ViewEntityName<V>>> | ViewRef<ViewEntityName<V>> | null | undefined,
+): ViewData<ViewEntityWithTypename<V>, ViewSelection<V>> | null | undefined;
 export function useView<V extends View<any, any>>(
   view: V,
-  ref: Deferred<ViewRef<ViewEntityName<V>>> | ViewRef<ViewEntityName<V>> | null,
-): ViewData<ViewEntityWithTypename<V>, ViewSelection<V>> | null {
+  ref: Deferred<ViewRef<ViewEntityName<V>>> | ViewRef<ViewEntityName<V>> | null | undefined,
+): ViewData<ViewEntityWithTypename<V>, ViewSelection<V>> | null | undefined {
   const client = useFateClient();
   const isDeferredRef = isDeferred(ref);
   const snapshotRef = useRef<ViewSnapshot<ViewEntity<V>, V[ViewTag]['select']> | null>(null);
@@ -129,9 +138,9 @@ export function useView<V extends View<any, any>>(
   );
 
   const getSnapshot = useCallback(() => {
-    if (ref === null) {
+    if (ref == null) {
       snapshotRef.current = null;
-      return nullSnapshot;
+      return ref === undefined ? undefinedSnapshot : nullSnapshot;
     }
 
     if (!isDeferredRef) {
@@ -153,7 +162,7 @@ export function useView<V extends View<any, any>>(
       }
 
       return readViewSnapshot(
-        client.ref(resolvedRef.__typename, resolvedRef.id, view),
+        client.ref(resolvedRef.__typename, resolvedRef.id, resolveView(view, resolvedRef)),
         deferredSnapshot.value.coverage,
         deferred,
       );
@@ -177,7 +186,7 @@ export function useView<V extends View<any, any>>(
 
       return Promise.resolve(
         readViewSnapshot(
-          client.ref(resolvedRef.__typename, resolvedRef.id, view),
+          client.ref(resolvedRef.__typename, resolvedRef.id, resolveView(view, resolvedRef)),
           deferredValue.coverage,
           deferred,
         ),
@@ -197,7 +206,7 @@ export function useView<V extends View<any, any>>(
 
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
-      if (ref === null) {
+      if (ref == null) {
         snapshotRef.current = null;
         return () => {};
       }
@@ -248,7 +257,7 @@ export function useView<V extends View<any, any>>(
 
   const snapshot = use(
     useDeferredValue(useSyncExternalStore(subscribe, getSnapshot, getSnapshot)),
-  ) as ViewSnapshot<ViewEntity<V>, ViewSelection<V>> | null;
+  ) as ViewSnapshot<ViewEntity<V>, ViewSelection<V>> | null | undefined;
 
-  return snapshot ? snapshot.data : null;
+  return snapshot ? snapshot.data : snapshot;
 }

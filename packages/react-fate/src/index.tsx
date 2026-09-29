@@ -36,6 +36,10 @@ export {
   type ViewRef,
   type InferFateAPI,
   view,
+  when,
+  type ConditionalSelection,
+  type AliasedView,
+  type ParameterizedView,
 } from '@nkzw/fate';
 
 export { FateClient, useFateClient } from './context.tsx';

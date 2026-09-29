@@ -17,7 +17,7 @@ import {
   type FateRoots,
   type ViewRef,
 } from '@nkzw/fate';
-import { expect, test, vi } from 'vite-plus/test';
+import { expect, expectTypeOf, test, vi } from 'vite-plus/test';
 import { createApp, defineComponent, h, nextTick, ref } from 'vue';
 import type { ShallowRef } from 'vue';
 import {
@@ -852,4 +852,105 @@ test('supports public aliases in Vue requests and reactive views', async () => {
   } finally {
     app.unmount();
   }
+});
+
+test('conditional named views preserve bindings and undefined results across reactive toggles', async () => {
+  const { when } = await import('../index.ts');
+  const Name = view<User>()(({ locale }: { locale: string }) => ({ name: { args: { locale } } }));
+  const Parent = view<User>()(({ enabled }: { enabled: boolean }) => ({
+    details: when(enabled, alias(Name({ locale: 'ja' }))),
+  }));
+  const enabled = ref(false);
+  const fetchById = vi.fn(async (_type, ids, _select, args) =>
+    ids.map((id: string | number) => ({ __typename: 'User', id, name: args?.name?.locale })),
+  );
+  const client = createClient({ roots: {}, transport: { fetchById }, types: [{ type: 'User' }] });
+  let child: ReturnType<typeof useView>;
+  const Component = defineComponent({
+    setup() {
+      const parent = useView(Parent, () =>
+        client.ref('User', '1', Parent({ enabled: enabled.value })),
+      );
+      const details = useView(Name, () => parent.value?.details);
+      expectTypeOf(details.value).toExtend<{ name: string } | undefined>();
+      child = details;
+      return () => h('span', details.value?.name ?? 'off');
+    },
+  });
+  const { app, container } = mount(Component, client);
+  await flushAsync();
+  expect(container.textContent).toBe('off');
+  expect(fetchById).not.toHaveBeenCalled();
+  enabled.value = true;
+  await flushAsync();
+  expect(container.textContent).toBe('ja');
+  enabled.value = false;
+  await flushAsync();
+  expect(container.textContent).toBe('off');
+  expect(await child!.ready()).toBeUndefined();
+  enabled.value = true;
+  await flushAsync();
+  expect(container.textContent).toBe('ja');
+  expect(fetchById).toHaveBeenCalledTimes(1);
+  app.unmount();
+});
+
+test('live parameterized Vue views switch bindings and skip undefined refs', async () => {
+  const Name = view<User>()(({ locale }: { locale: string }) => ({ name: { args: { locale } } }));
+  const unsubscribe = vi.fn();
+  const subscribeById = vi.fn(() => unsubscribe);
+  const fetchById = vi.fn(async (_type, ids, _select, args) =>
+    ids.map((id: string | number) => ({ __typename: 'User', id, name: args?.name?.locale })),
+  );
+  const client = createClient({
+    roots: {},
+    transport: { fetchById, subscribeById },
+    types: [{ type: 'User' }],
+  });
+  const source = ref<ViewRef<'User'> | undefined>(undefined);
+  const Component = defineComponent({
+    setup() {
+      const data = useLiveView(Name, source);
+      return () => h('span', data.value?.name ?? 'off');
+    },
+  });
+  const { app, container } = mount(Component, client);
+  await flushAsync();
+  expect(container.textContent).toBe('off');
+  expect(subscribeById).not.toHaveBeenCalled();
+  expect(fetchById).not.toHaveBeenCalled();
+  source.value = client.ref('User', '1', Name({ locale: 'en' }));
+  await flushAsync();
+  expect(container.textContent).toBe('en');
+  source.value = client.ref('User', '1', Name({ locale: 'ja' }));
+  await flushAsync();
+  expect(container.textContent).toBe('ja');
+  expect(subscribeById).toHaveBeenCalledTimes(2);
+  source.value = undefined;
+  await flushAsync();
+  expect(container.textContent).toBe('off');
+  expect(unsubscribe).toHaveBeenCalledTimes(2);
+  app.unmount();
+});
+
+test('Vue preserves null and undefined through optional view resources', async () => {
+  const Name = view<User>()({ name: true });
+  const fetchById = vi.fn(async () => []);
+  const client = createClient({ roots: {}, transport: { fetchById }, types: [{ type: 'User' }] });
+  const subscribe = vi.spyOn(client.store, 'subscribe');
+  const Component = defineComponent({
+    setup() {
+      const absent = useView(Name, undefined);
+      const empty = useView(Name, null);
+      expectTypeOf(absent.value).toEqualTypeOf<undefined>();
+      expectTypeOf(empty.value).toEqualTypeOf<null>();
+      return () => h('span', `${String(absent.value)}:${String(empty.value)}`);
+    },
+  });
+  const { app, container } = mount(Component, client);
+  await flushAsync();
+  expect(container.textContent).toBe('undefined:null');
+  expect(fetchById).not.toHaveBeenCalled();
+  expect(subscribe).not.toHaveBeenCalled();
+  app.unmount();
 });

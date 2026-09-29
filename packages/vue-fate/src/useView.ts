@@ -10,6 +10,7 @@ import {
   type ViewSnapshot,
   type ViewTag,
   isDeferred,
+  resolveView,
 } from '@nkzw/fate';
 import {
   markRaw,
@@ -36,39 +37,54 @@ export type ViewResource<T> = ShallowRef<T> & {
 };
 
 const nullSnapshot = fulfilledThenable(null);
+const undefinedSnapshot = fulfilledThenable(undefined);
 
 /**
  * Resolves a reference against a view and subscribes to updates for that selection.
  */
-export function useView<V extends View<any, any>, R extends ViewRef<ViewEntityName<V>> | null>(
-  view: V,
-  ref: MaybeRefOrGetter<R>,
-): ViewResource<R extends null ? null : ViewData<ViewEntityWithTypename<V>, ViewSelection<V>>>;
 export function useView<
   V extends View<any, any>,
-  R extends Deferred<ViewRef<ViewEntityName<V>>> | null,
+  R extends ViewRef<ViewEntityName<V>> | null | undefined,
 >(
   view: V,
   ref: MaybeRefOrGetter<R>,
-): ViewResource<R extends null ? null : ViewData<ViewEntityWithTypename<V>, ViewSelection<V>>>;
+): ViewResource<
+  R extends null | undefined ? R : ViewData<ViewEntityWithTypename<V>, ViewSelection<V>>
+>;
+export function useView<
+  V extends View<any, any>,
+  R extends Deferred<ViewRef<ViewEntityName<V>>> | null | undefined,
+>(
+  view: V,
+  ref: MaybeRefOrGetter<R>,
+): ViewResource<
+  R extends null | undefined ? R : ViewData<ViewEntityWithTypename<V>, ViewSelection<V>>
+>;
 export function useView<V extends View<any, any>>(
   view: V,
-  ref: MaybeRefOrGetter<Deferred<ViewRef<ViewEntityName<V>>> | ViewRef<ViewEntityName<V>> | null>,
-): ViewResource<ViewData<ViewEntityWithTypename<V>, ViewSelection<V>> | null>;
+  ref: MaybeRefOrGetter<
+    Deferred<ViewRef<ViewEntityName<V>>> | ViewRef<ViewEntityName<V>> | null | undefined
+  >,
+): ViewResource<ViewData<ViewEntityWithTypename<V>, ViewSelection<V>> | null | undefined>;
 export function useView<V extends View<any, any>>(
   view: V,
-  ref: MaybeRefOrGetter<Deferred<ViewRef<ViewEntityName<V>>> | ViewRef<ViewEntityName<V>> | null>,
-): ViewResource<ViewData<ViewEntityWithTypename<V>, ViewSelection<V>> | null> {
+  ref: MaybeRefOrGetter<
+    Deferred<ViewRef<ViewEntityName<V>>> | ViewRef<ViewEntityName<V>> | null | undefined
+  >,
+): ViewResource<ViewData<ViewEntityWithTypename<V>, ViewSelection<V>> | null | undefined> {
   const clientSource = getFateClientSource(useFateClient());
-  const data = shallowRef<ViewData<ViewEntityWithTypename<V>, ViewSelection<V>> | null>(null);
+  const data = shallowRef<ViewData<ViewEntityWithTypename<V>, ViewSelection<V>> | null | undefined>(
+    toValue(ref) === undefined ? undefined : null,
+  );
   const errorState = shallowRef<unknown>(null);
   const pending = shallowRef(false);
   let disposed = false;
   let activeClient = clientSource.value;
   let snapshot: ViewSnapshot<ViewEntity<V>, V[ViewTag]['select']> | null = null;
   let token = 0;
-  let currentPromise: Promise<ViewData<ViewEntityWithTypename<V>, ViewSelection<V>> | null> | null =
-    null;
+  let currentPromise: Promise<
+    ViewData<ViewEntityWithTypename<V>, ViewSelection<V>> | null | undefined
+  > | null = null;
   const subscriptions = new Map<EntityId, () => void>();
 
   const cleanupSubscriptions = (nextIds: ReadonlySet<EntityId> = new Set()) => {
@@ -119,8 +135,8 @@ export function useView<V extends View<any, any>>(
 
   const getSnapshot = () => {
     const currentRef = toValue(ref);
-    if (currentRef === null) {
-      return nullSnapshot;
+    if (currentRef == null) {
+      return currentRef === undefined ? undefinedSnapshot : nullSnapshot;
     }
 
     if (!isDeferred(currentRef)) {
@@ -140,7 +156,7 @@ export function useView<V extends View<any, any>>(
       }
 
       return readViewSnapshot(
-        activeClient.ref(resolvedRef.__typename, resolvedRef.id, view),
+        activeClient.ref(resolvedRef.__typename, resolvedRef.id, resolveView(view, resolvedRef)),
         deferredSnapshot.value.coverage,
       );
     }
@@ -155,7 +171,7 @@ export function useView<V extends View<any, any>>(
       }
 
       return readViewSnapshot(
-        activeClient.ref(resolvedRef.__typename, resolvedRef.id, view),
+        activeClient.ref(resolvedRef.__typename, resolvedRef.id, resolveView(view, resolvedRef)),
         deferredValue.coverage,
       );
     });
@@ -176,15 +192,15 @@ export function useView<V extends View<any, any>>(
     currentPromise = Promise.resolve(nextSnapshot).then(
       (value) => {
         if (!disposed && currentToken === token) {
-          snapshot = value;
-          data.value = value ? (markRaw(value.data) as typeof data.value) : null;
+          snapshot = value ?? null;
+          data.value = value ? (markRaw(value.data) as typeof data.value) : value;
           pending.value = false;
           updateSubscriptions();
         }
-        return (value ? value.data : null) as ViewData<
-          ViewEntityWithTypename<V>,
-          ViewSelection<V>
-        > | null;
+        return (value ? value.data : value) as
+          | ViewData<ViewEntityWithTypename<V>, ViewSelection<V>>
+          | null
+          | undefined;
       },
       (error) => {
         if (!disposed && currentToken === token) {
@@ -228,5 +244,5 @@ export function useView<V extends View<any, any>>(
     pending,
     ready: () => currentPromise ?? refresh(),
     refresh,
-  }) as ViewResource<ViewData<ViewEntityWithTypename<V>, ViewSelection<V>> | null>;
+  }) as ViewResource<ViewData<ViewEntityWithTypename<V>, ViewSelection<V>> | null | undefined>;
 }
