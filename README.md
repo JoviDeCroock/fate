@@ -430,6 +430,96 @@ const PostDetail = ({ post: postRef }: { post: ViewRef<'Post'> }) => {
 
 ViewRefs carry a set of view names they can resolve. `useView` throws if a ref does not include the required view.
 
+### Parameters and Conditional Selections
+
+A view can take parameters. Define the selection with a function, then bind its parameters where you request or compose the view:
+
+```tsx
+import { alias, useRequest, useView, view, when, type ViewRef } from 'react-fate';
+import type { User } from '@your-org/server/views';
+
+const AccountView = view<User>()({ email: true });
+
+const ProfileView = view<User>()(({ isViewer }: { isViewer: boolean }) => ({
+  name: true,
+  account: when(isViewer, alias(AccountView)),
+}));
+
+function Profile({ userId, isViewer }: { userId: string; isViewer: boolean }) {
+  const { user } = useRequest({
+    user: { id: userId, view: ProfileView({ isViewer }) },
+  });
+  const profile = useView(ProfileView, user);
+  const account = useView(AccountView, profile.account);
+
+  return (
+    <div>
+      <h2>{profile.name}</h2>
+      {account && <p>{account.email}</p>}
+    </div>
+  );
+}
+```
+
+`alias(AccountView)` gives the selection a named ref to the **same User**. The name `account` belongs to your result; it does not need to exist in the server schema. Read the ref with `useView` to access the fragment's selected fields. The existing `alias('field', selection)` form still selects a schema field under another name.
+
+`when(condition, selection)` works with named fragments and ordinary fields:
+
+```tsx
+const ProfileView = view<User>()(({ isViewer }: { isViewer: boolean }) => ({
+  name: true,
+  email: when(isViewer, true),
+}));
+```
+
+A false condition returns `undefined` and excludes that branch from fetching and subscriptions, even if its data is already cached. A selected field whose server value is `null` still returns `null`. TypeScript preserves that distinction: a boolean condition adds `undefined` to the result type; literal `true` keeps the selected type; literal `false` produces `undefined`.
+
+Both `useView` and `useLiveView` accept `undefined` refs and return `undefined` without fetching or subscribing. Call the hooks unconditionally, as in the example above.
+
+#### Carrying Parameters with Refs
+
+Bindings travel with refs. Child components read the view definition without reconstructing its parameters:
+
+```tsx
+const LocalizedNameView = view<User>()(({ locale }: { locale: string }) => ({
+  name: { args: { locale } },
+}));
+
+const NamesView = view<User>()({
+  english: alias(LocalizedNameView({ locale: 'en' })),
+  japanese: alias(LocalizedNameView({ locale: 'ja' })),
+});
+
+function Names({ user }: { user: ViewRef<'User'> }) {
+  const names = useView(NamesView, user);
+  const english = useView(LocalizedNameView, names.english);
+  const japanese = useView(LocalizedNameView, names.japanese);
+
+  return (
+    <p>
+      {english.name} / {japanese.name}
+    </p>
+  );
+}
+```
+
+This example assumes the server's `name` field accepts a `locale` argument. The two refs identify the same entity with independent bindings. Connections inside named views likewise keep their own arguments and pagination state.
+
+Declare view definitions at module scope. Binding an equivalent parameter object again preserves the logical request and ref identity; no `useMemo` is needed. Parameter objects use the same serializable values as field arguments, and fate snapshots them when binding. Keep selection functions pure, with all varying inputs passed as parameters.
+
+Bind a parameterized definition before using it in a request, nested selection, alias, or spread. If a single ref contains multiple bindings of one definition, use named aliases to give each binding its own ref. Conditional anonymous spreads are not supported; use `when(condition, alias(View))` instead.
+
+#### Vue
+
+The same `view`, `alias`, and `when` API is available from `vue-fate`. Pass reactive refs or getters to the view composables:
+
+```ts
+const profile = useView(ProfileView, () => request.value?.user);
+const account = useView(AccountView, () => profile.value?.account);
+```
+
+When the ref is `undefined`, the resource's value and `ready()` result are `undefined`, and the view has no active subscriptions.
+
 ## Requests
 
 ### Requesting Lists
@@ -612,6 +702,94 @@ fate.hydrate(loaderData.fate, { merge: 'replace' });
 `preserve-existing` recursively combines plain scalar objects while keeping browser values on conflicts. Arrays, dates, entity references, and list windows are atomic: an existing browser value wins as a whole. Replaying a snapshot is safe and does not notify subscribers when durable cache state is unchanged.
 
 Do not reuse request-scoped snapshots across users. Dehydrate after awaited route preloading: snapshots are point-in-time values and do not stream cache patches for data that resolves later. Hydration and dehydration reject clients with in-flight requests, so hydrate the initial snapshot before rendering.
+
+### Observing Request State
+
+React's `useRequestState(request, options)` observes a request without suspending.
+It returns `status`, `data`, `error`, and `isFetching`. Status is `pending`, `ready`,
+or `error` for an enabled network request. An initial failure exposes the original
+error rather than throwing during render. Request data contains the same refs as
+`useRequest`; resolve them with `useView`.
+
+Use `{ enabled: false }` for an empty search or an inactive screen. The status is
+`disabled`, data is undefined, and no request starts. Changing `enabled` to true
+starts the request. Equivalent inline request objects do not cause repeat fetches.
+
+Use `{ mode: 'cache-only' }` to observe already-cached data. A complete selection
+has status `ready`; an incomplete selection has status `missing` and undefined
+data. A successful nullable root remains `ready` with a null value. Cache-only
+requests never fetch, and their view refs cannot fetch missing fields either.
+Mounted observers retain their request's records until unmount.
+
+Outside React, `client.observeRequest(request, options)` exposes `getSnapshot()`
+and `subscribe(listener)`. The first subscriber starts an enabled request;
+unsubscribing releases its retention. Reading a snapshot alone never starts work.
+
+Every request state includes a stable `refetch()` function. It forces a network
+request, returns a promise for the completed result, and rejects with the original
+error on failure. Concurrent calls share pending work. During refresh, complete
+cached data stays available with `status: 'ready'` and `isFetching: true`. A failed
+refresh keeps that data and exposes `error`; the next attempt clears the error.
+`stale-while-revalidate` observers track the entire background request the same
+way, including failures. Disabled and cache-only observers reject explicit
+refetches without fetching; enable the request or change its mode first.
+
+```ts
+const state = useRequestState(request, { mode: 'stale-while-revalidate' });
+// Render state.data, state.isFetching, and state.error independently.
+await state.refetch(); // Also usable from a refresh button or retry action.
+```
+
+Overlapping reads use their network start order when normalizing responses. An
+older response cannot overwrite a field already supplied by a newer response or
+a later confirmed write. It may still fill other fields. Root results and list
+replacements also retain the newer result. Optimistic layers remain visible over
+incoming confirmed data; rolling them back reveals that data, while committing a
+mutation protects its confirmed fields from older requests.
+
+#### Aliases
+
+Use `alias(sourceField, selection)` to select one schema field under multiple
+result names, with independent arguments:
+
+```ts
+const GamesView = view<User>()({
+  activeGames: alias('games', {
+    args: { first: 20, status: 'Active' },
+    items: { node: GameView },
+    pagination: { hasNext: true, nextCursor: true },
+  }),
+  waitingGames: alias('games', {
+    args: { first: 20, status: 'Waiting' },
+    items: { node: GameView },
+  }),
+  displayName: alias('name', true),
+});
+
+const request = { currentUser: alias('viewer', { view: GamesView }) };
+```
+
+Source fields, nested selections, result types, and generated root argument
+contracts remain checked. Alias names affect the returned shape; normalized
+identity uses the source field and its arguments. An ordinary selection with the
+same arguments shares the cached data. Connection filters identify separate
+cache slots and pagination state. Conflicting response names or arguments in a
+composed view fail during planning. `id` and `__typename` are reserved result
+names because fate needs them for entity identity.
+
+GraphQL emits native aliases, including inside mutation selections, so multiple
+variants execute in one operation. Native HTTP, tRPC, and custom transports
+receive compatible reads with ordinary schema field names; conflicting variants
+may require multiple reads or subscriptions. These fallback reads are independent
+server operations. A mutation that needs multiple variants requires native alias
+support and otherwise rejects before executing. A simple rename is lowered for
+native mutations without repeating the action.
+
+Custom transports can set `supportsAliases: true` to handle the full selection in
+one operation. Selection path segments and corresponding argument keys then use
+`resultName:schemaField`, and returned records must use those same encoded keys.
+GraphQL performs that conversion automatically. Applications consume the declared
+result names, never the encoded transport names.
 
 ## Deferred Views
 
@@ -1525,7 +1703,7 @@ Native HTTP sends durable mutations and receipt-only recovery using protocol ver
 
 ### tRPC, GraphQL, and Custom Transports
 
-For tRPC, GraphQL, or a custom transport, provide a `mutateDurably(name, input, select, identity)` method that sends the identity to an endpoint with server deduplication. Regular calls continue to use `mutate(name, input, select)`.
+For tRPC, GraphQL, or a custom transport, provide a `mutateDurably(name, input, select, identity)` method that sends the identity to an endpoint with server deduplication. Regular calls continue to use `mutate(name, input, select)`. GraphQL passes selected field arguments as an optional fifth parameter to `mutateDurably` (fourth for `mutate`), separate from the mutation input. Forward that parameter if the durable response selects fields with arguments.
 
 Both `createTRPCTransport` and `createGraphQLTransport`, including their generated clients, accept `mutateDurably`. For example, you can use a native fate endpoint for durable mutations alongside your existing transport:
 
@@ -1934,7 +2112,7 @@ The client-only template is the smallest reference for the integration. It conta
 The GraphQL transport expects a schema with Relay-style object identity and pagination:
 
 - Entity objects include `id` and `__typename`.
-- Object fetches go through a `nodes(ids:)` field.
+- Object fetches use `nodes(ids:)` by default, or configured per-type query fields.
 - List fields return Relay connections with `edges`, `cursor`, `node`, and `pageInfo`.
 - Root queries and mutations return the entity type selected by the fate view.
 
@@ -2113,6 +2291,31 @@ GraphQL operations issued in the same microtask are batched into a single GraphQ
 
 Deferred view fields work with the GraphQL transport through the same normalized cache flow as native HTTP: the eager query omits `defer(...)` fields, and `useView`, `useListView`, or `useLiveListView` fetches the missing selection through `nodes(ids:)` when the deferred handle is read. GraphQL `@defer` is the natural wire format for this feature, but fate's GraphQL transport currently expects one JSON result per operation and does not consume incremental multipart patches yet.
 
+### Refetch Fields
+
+For servers without `nodes(ids:)`, configure a query field for each refetchable entity type:
+
+```tsx
+export const fateGraphQL = {
+  byId: {
+    Game: { field: 'fetch__Game' },
+    User: { field: 'fetch__User', idArg: 'id' },
+  },
+  nodes: false,
+  // Keep your schema, roots, and mutations here.
+} as const;
+```
+
+`idArg` defaults to `id`. Each mapped field must return one entity of the named type, optionally nullable. The adapter batches multiple IDs into aliased query fields in one request, preserves input order for returned records, and omits null results. Node ID encoding and decoding apply to mapped fetches too.
+
+Mappings take precedence over the default `nodes(ids:)` fallback. Set `nodes: false` to disable that fallback; fetching an unmapped type then reports a configuration error without issuing a request. Existing clients need no configuration changes. Direct users of `createGraphQLTransport` can pass the same `byId` and `nodes` options.
+
+When `schema` is supplied, codegen and transport construction validate the mapping: the field must exist, its ID argument must accept a single `ID`, `String`, or `Int`, its result must match the concrete entity type, and any other arguments must be optional or have defaults. Schema metadata also supplies the wire variable types. Without a schema, identifiers are validated and arguments use GraphQL literals.
+
+Nested pagination uses the owner ID only for the mapped query field. Pagination and filter arguments remain on the connection field. For example, fetching another page of a user's games produces `fetch__User(id: $owner) { games(first: $count, after: $cursor) { ... } }`.
+
+Choose fields with the appropriate authorization rules for the consuming views. The adapter does not switch between public and authenticated lookup fields automatically.
+
 ### Object IDs
 
 The transport converts between fate entity IDs and GraphQL node IDs. By default, it sends IDs as `${type}-${id}` and strips that prefix from returned IDs. Override this if your schema uses Relay global IDs, raw database IDs, or another encoding:
@@ -2252,6 +2455,80 @@ const fate = createFateClient({
 The GraphQL transport is intentionally a mapping layer. It does not require `createFateServer`, the Prisma adapter, or the Drizzle adapter. Your GraphQL server remains responsible for authorization, validation, resolver behavior, cursor pagination, and mutation side effects.
 
 Use data views to expose only the fields the client should be able to select, keep GraphQL schema authorization in your server, and treat `src/fate/graphql.ts` as the contract between your GraphQL API and fate's client.
+
+### Schema-Aware Arguments
+
+Provide your server's schema in the mapping module to generate GraphQL argument contracts and send arguments as typed variables. The `schema` option accepts SDL text or a `GraphQLSchema` object and is evaluated during client generation:
+
+```tsx
+import { readFileSync } from 'node:fs';
+
+export const fateGraphQL = {
+  schema: readFileSync(new URL('./schema.graphql', import.meta.url), 'utf8'),
+  roots: {
+    maps: { field: 'maps' },
+  },
+  mutations: {
+    'map.update': graphqlMutation<Map, UpdateMapInput, Map>('Map', {
+      field: 'updateMap',
+      inputArg: false,
+    }),
+  },
+};
+```
+
+Install `graphql` in the package performing generation when passing SDL. Run `fate generate` again after updating the schema. Generated browser code contains argument metadata, not the SDL or GraphQL parser. Existing clients without a schema retain literal argument serialization; use schema-aware generation for enums.
+
+SDL text must include definitions for every directive it uses. Some server-generated or Relay-oriented schema files contain annotations such as `@auth` or `@fetchable` without declaring them; strict SDL parsing rejects those files. Prefer adding the directive definitions to the exported SDL. If the omissions are intentional, pass a schema object instead:
+
+```tsx
+import { readFileSync } from 'node:fs';
+import { buildSchema } from 'graphql';
+
+const sdl = readFileSync(new URL('./schema.graphql', import.meta.url), 'utf8');
+export const fateGraphQL = {
+  schema: buildSchema(sdl, { assumeValidSDL: true }),
+  // ...roots and mutations...
+};
+```
+
+`assumeValidSDL` skips SDL validation, so use it only when the annotations are known and the schema is validated elsewhere. Fate still extracts argument metadata at generation time; the browser bundle does not include the schema object.
+
+For example, given `maps(biome: Biome)`, an argument `{ biome: 'Grassland' }` is sent as a variable declared with type `Biome`, rather than an invalid quoted enum literal. Variables also work for nested field arguments, input objects, lists, node IDs, and mutations. Batched operations use distinct variable names and separate query and mutation payloads. Mutation selection arguments are kept out of mutation inputs. A GraphQL mutation argument named `args` belongs in `input` like any other wire argument; use the mutation's `view` or its separate `args` option for selected field arguments. When calling `transport.mutate` directly, pass selected field arguments as its optional fourth parameter.
+
+The generated client enforces root arguments in `client.request` and the React/Vue `useRequest` adapters. Mutation inputs are derived from the schema using the configured `inputArg`, replacing the manually declared input type for generated clients. Non-null arguments are required unless the schema supplies a default. Omitting an optional/defaulted value preserves its server default; explicit `null` remains distinct.
+
+Generation also exports `GraphQLInputs`, `GraphQLFieldArguments`, and `GraphQLSelectionArguments` from `.fate/client.generated.ts`. Use field contracts to check arguments inside reusable views:
+
+```tsx
+import type { GraphQLFieldArguments } from '../.fate/client.generated.ts';
+
+const stateArgs = {
+  biome: 'Grassland',
+} satisfies GraphQLFieldArguments['Map']['state'];
+
+const MapView = view<Map>()({
+  id: true,
+  state: { args: stateArgs },
+});
+```
+
+At runtime the transport checks selected field names, argument names, enum values, required inputs, built-in scalar types, and nested input objects before issuing an HTTP request. Custom scalar values have TypeScript type `unknown` and remain subject to server validation. These contracts cover arguments; they do not add support for GraphQL result shapes that the transport otherwise does not support.
+
+For a manually constructed transport, extract metadata on the build/server side with `createGraphQLArgumentSchema` from `@nkzw/fate/vite`, then pass the serialized result as the transport's `schema` option. Keep that build-time helper out of browser modules.
+
+### Errors and Partial Results
+
+A failed GraphQL operation rejects with `GraphQLRequestError`. It preserves all
+GraphQL `errors`, the first error's `path` and `extensions`, and the HTTP `status`
+when available. HTTP errors use the same error type; network failures retain the
+original fetch error.
+
+Partial response data is available as `error.data` for explicit application
+handling. It is unnormalized diagnostic data, not a successful typed result, and
+fate does not write it to the cache. Successful sibling operations in the same
+batch still resolve normally, including legitimate `null` results. Mutation
+functions retain their `{ result, error }` result contract.
 
 ## Server Integration
 
