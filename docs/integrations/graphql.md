@@ -392,6 +392,21 @@ export const fateGraphQL = {
 
 Install `graphql` in the package performing generation when passing SDL. Run `fate generate` again after updating the schema. Generated browser code contains argument metadata, not the SDL or GraphQL parser. Existing clients without a schema retain literal argument serialization; use schema-aware generation for enums.
 
+SDL text must include definitions for every directive it uses. Some server-generated or Relay-oriented schema files contain annotations such as `@auth` or `@fetchable` without declaring them; strict SDL parsing rejects those files. Prefer adding the directive definitions to the exported SDL. If the omissions are intentional, pass a schema object instead:
+
+```tsx
+import { readFileSync } from 'node:fs';
+import { buildSchema } from 'graphql';
+
+const sdl = readFileSync(new URL('./schema.graphql', import.meta.url), 'utf8');
+export const fateGraphQL = {
+  schema: buildSchema(sdl, { assumeValidSDL: true }),
+  // ...roots and mutations...
+};
+```
+
+`assumeValidSDL` skips SDL validation, so use it only when the annotations are known and the schema is validated elsewhere. Fate still extracts argument metadata at generation time; the browser bundle does not include the schema object.
+
 For example, given `maps(biome: Biome)`, an argument `{ biome: 'Grassland' }` is sent as a variable declared with type `Biome`, rather than an invalid quoted enum literal. Variables also work for nested field arguments, input objects, lists, node IDs, and mutations. Batched operations use distinct variable names and separate query and mutation payloads. Mutation selection arguments are kept out of mutation inputs. A GraphQL mutation argument named `args` belongs in `input` like any other wire argument; use the mutation's `view` or its separate `args` option for selected field arguments. When calling `transport.mutate` directly, pass selected field arguments as its optional fourth parameter.
 
 The generated client enforces root arguments in `client.request` and the React/Vue `useRequest` adapters. Mutation inputs are derived from the schema using the configured `inputArg`, replacing the manually declared input type for generated clients. Non-null arguments are required unless the schema supplies a default. Omitting an optional/defaulted value preserves its server default; explicit `null` remains distinct.

@@ -4,6 +4,30 @@ import type { GraphQLArgumentSchema, GraphQLArguments } from '../graphqlSchema.t
 
 const require = createRequire(import.meta.url);
 
+const schemaFromSDL = (source: string): GraphQLSchema => {
+  try {
+    return (require('graphql') as typeof import('graphql')).buildSchema(source);
+  } catch (error) {
+    const directives =
+      error instanceof Error
+        ? [
+            ...new Set(
+              [...error.message.matchAll(/Unknown directive "(@[_A-Za-z][_0-9A-Za-z]*)"/g)].map(
+                (match) => match[1],
+              ),
+            ),
+          ]
+        : [];
+    if (directives.length) {
+      throw new Error(
+        `fate(graphql): SDL uses undeclared directives ${directives.join(', ')}. Declare them in the SDL, or pass a GraphQLSchema built with buildSchema(sdl, { assumeValidSDL: true }) when this is intentional.`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+};
+
 const argument = (value: { default?: unknown; defaultValue?: unknown; type: unknown }) => ({
   ...(value.default !== undefined || value.defaultValue !== undefined
     ? { hasDefault: true }
@@ -13,10 +37,7 @@ const argument = (value: { default?: unknown; defaultValue?: unknown; type: unkn
 
 /** Extracts serializable argument metadata without shipping GraphQL's schema implementation. */
 export function createGraphQLArgumentSchema(source: string | GraphQLSchema): GraphQLArgumentSchema {
-  const schema =
-    typeof source === 'string'
-      ? (require('graphql') as typeof import('graphql')).buildSchema(source)
-      : source;
+  const schema = typeof source === 'string' ? schemaFromSDL(source) : source;
   const queryType = schema.getQueryType()?.name;
   if (!queryType) {
     throw new Error('fate(graphql): The schema must have a query type.');

@@ -49,6 +49,23 @@ test('extracts input defaults and custom root names from SDL and schema objects'
   expect(metadata.fields.Read.map.filter.type).toBe('Filter!');
 });
 
+test('explains undeclared SDL directives without relaxing schema validation', () => {
+  const annotatedSDL = `
+    type Query @fetchable(field_name: "id") {
+      viewer: String @auth(role: "User")
+    }
+  `;
+  expect(() => createGraphQLArgumentSchema(annotatedSDL)).toThrow(
+    /SDL uses undeclared directives @fetchable, @auth.*Declare them.*assumeValidSDL/,
+  );
+  expect(
+    createGraphQLArgumentSchema(buildSchema(annotatedSDL, { assumeValidSDL: true })).queryType,
+  ).toBe('Query');
+  expect(() => createGraphQLArgumentSchema('type Query { viewer: Missing }')).toThrow(
+    /Unknown type "Missing"/,
+  );
+});
+
 test('rejects schema mappings with unknown fields or mutation inputs during generation', () => {
   const generate = (fateGraphQL: object) =>
     createClientSource({
