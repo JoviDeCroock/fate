@@ -217,3 +217,10 @@ const state = useRequestState(request, { mode: 'stale-while-revalidate' });
 // Render state.data, state.isFetching, and state.error independently.
 await state.refetch(); // Also usable from a refresh button or retry action.
 ```
+
+Overlapping reads use their network start order when normalizing responses. An
+older response cannot overwrite a field already supplied by a newer response or
+a later confirmed write. It may still fill other fields. Root results and list
+replacements also retain the newer result. Optimistic layers remain visible over
+incoming confirmed data; rolling them back reveals that data, while committing a
+mutation protects its confirmed fields from older requests.

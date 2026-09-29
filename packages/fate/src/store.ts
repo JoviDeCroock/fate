@@ -223,6 +223,11 @@ export class Store {
     return this.optimisticLayers.size > 0;
   }
 
+  /** @internal Whether a temporary optimistic layer is being replayed. */
+  get isRecordingOptimistic(): boolean {
+    return this.recordingLayer !== undefined;
+  }
+
   get isRebasing(): boolean {
     return this.rebase !== undefined;
   }

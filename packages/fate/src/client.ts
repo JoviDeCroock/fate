@@ -436,6 +436,31 @@ export class FateClient<
   Mutations extends FateMutations,
   HydrationScope extends string = string,
 > {
+  private writeGeneration = 0;
+  private applyingGeneration: number | undefined;
+  private readonly writeVersions = new Map<string, number>();
+
+  private acceptWrite(key: string, generation: number): boolean {
+    if (this.store.isRecordingOptimistic) {
+      return true;
+    }
+    if ((this.writeVersions.get(key) ?? 0) > generation) {
+      return false;
+    }
+    this.writeVersions.set(key, generation);
+    return true;
+  }
+
+  private withWriteGeneration<T>(generation: number, apply: () => T): T {
+    const previous = this.applyingGeneration;
+    this.applyingGeneration = generation;
+    try {
+      return apply();
+    } finally {
+      this.applyingGeneration = previous;
+    }
+  }
+
   private readonly requestListeners = new Set<() => void>();
   private requestNotificationScheduled = false;
   private readonly cacheOnlyRefs = new WeakSet<object>();
@@ -483,6 +508,20 @@ export class FateClient<
       this.notifyRequests();
     },
     (change) => {
+      if (!this.store.isRecordingOptimistic) {
+        const generation = this.applyingGeneration ?? ++this.writeGeneration;
+        if (change.kind === 'record') {
+          if (change.paths) {
+            for (const path of change.paths) {
+              this.acceptWrite(JSON.stringify([change.key, path.split('.')[0]]), generation);
+            }
+          } else {
+            this.acceptWrite(JSON.stringify([change.key]), generation);
+          }
+        } else {
+          this.acceptWrite(`list:${change.key}`, generation);
+        }
+      }
       this.persistenceRuntime?.changed(change);
       this.notifyRequests();
     },
@@ -2637,6 +2676,9 @@ export class FateClient<
         return await this.withPersistenceLifecycle(request);
       } finally {
         this.pendingNetworkRequests -= 1;
+        if (!this.pendingNetworkRequests) {
+          this.writeVersions.clear();
+        }
         this.persistenceRuntime?.changed();
       }
     });
@@ -2987,11 +3029,14 @@ export class FateClient<
     prefix: string | null = null,
   ) {
     const resolvedArgs = resolvedArgsFromPlan(plan);
+    const generation = ++this.writeGeneration;
     await this.trackPendingRequest(async () => {
       const records = await this.transport.fetchById(type, ids, select, resolvedArgs);
       this.assertPersistenceActive();
       for (const record of records) {
-        this.writeEntity(type, record as AnyRecord, select, plan, prefix);
+        this.withWriteGeneration(generation, () =>
+          this.writeEntity(type, record as AnyRecord, select, plan, prefix),
+        );
       }
     });
   }
@@ -3003,16 +3048,23 @@ export class FateClient<
       );
     }
 
+    const generation = ++this.writeGeneration;
     await this.trackPendingRequest(async () => {
       const record = await this.transport.fetchQuery!(item.name, item.plan.paths, item.argsPayload);
       this.assertPersistenceActive();
       if (!record || typeof record !== 'object') {
-        this.rootRequests.set(item.queryKey, null);
+        if (this.acceptWrite(`root:${item.queryKey}`, generation)) {
+          this.rootRequests.set(item.queryKey, null);
+        }
         return;
       }
 
-      const entityId = this.writeEntity(item.type, record as AnyRecord, item.plan.paths, item.plan);
-      this.rootRequests.set(item.queryKey, entityId);
+      const entityId = this.withWriteGeneration(generation, () =>
+        this.writeEntity(item.type, record as AnyRecord, item.plan.paths, item.plan),
+      );
+      if (this.acceptWrite(`root:${item.queryKey}`, generation)) {
+        this.rootRequests.set(item.queryKey, entityId);
+      }
     });
   }
 
@@ -3020,11 +3072,14 @@ export class FateClient<
     if (!this.transport.fetchQuery) {
       throw new Error(`fate: transport does not support value queries for '${item.name}'.`);
     }
-    const value = await this.trackPendingRequest(() =>
-      this.transport.fetchQuery!(item.name, item.plan.paths, item.argsPayload),
-    );
-    this.assertPersistenceActive();
-    this.rootValues.set(item.queryKey, value);
+    const generation = ++this.writeGeneration;
+    await this.trackPendingRequest(async () => {
+      const value = await this.transport.fetchQuery!(item.name, item.plan.paths, item.argsPayload);
+      this.assertPersistenceActive();
+      if (this.acceptWrite(`root:${item.queryKey}`, generation)) {
+        this.rootValues.set(item.queryKey, value);
+      }
+    });
   }
 
   private async fetchListAndNormalize(item: ListRequestDescriptor) {
@@ -3034,6 +3089,7 @@ export class FateClient<
       );
     }
 
+    const generation = ++this.writeGeneration;
     await this.trackPendingRequest(async () => {
       const connection = await this.transport.fetchList!(
         item.name,
@@ -3041,38 +3097,43 @@ export class FateClient<
         item.argsPayload,
       );
       this.assertPersistenceActive();
+      if (!this.acceptWrite(`list:${item.listKey}`, generation)) {
+        return;
+      }
       if (connection === null) {
         this.rootValues.set(`list:${item.listKey}`, null);
         return;
       }
       this.rootValues.delete(`list:${item.listKey}`);
       const { items, pagination } = connection;
-      this.store.update(() => {
-        const ids: Array<EntityId> = [];
-        const cursors: Array<string | undefined> = [];
-        for (const entry of items) {
-          const id = this.writeEntity(
-            item.type,
-            entry.node as AnyRecord,
-            item.plan.paths,
-            item.plan,
-          );
-          ids.push(id);
-          cursors.push(entry.cursor);
-        }
-        if (!filterConnectionArgs(item.argsPayload)) {
-          this.registerRootList(item.type, item.listKey);
-        }
+      this.withWriteGeneration(generation, () =>
+        this.store.update(() => {
+          const ids: Array<EntityId> = [];
+          const cursors: Array<string | undefined> = [];
+          for (const entry of items) {
+            const id = this.writeEntity(
+              item.type,
+              entry.node as AnyRecord,
+              item.plan.paths,
+              item.plan,
+            );
+            ids.push(id);
+            cursors.push(entry.cursor);
+          }
+          if (!filterConnectionArgs(item.argsPayload)) {
+            this.registerRootList(item.type, item.listKey);
+          }
 
-        const previous = this.store.getListState(item.listKey);
-        this.store.setList(
-          item.listKey,
-          this.mergeListState(previous, ids, cursors, pagination, {
-            ...getPaginationMergeInfo(item.argsPayload),
-            replace: true,
-          }),
-        );
-      });
+          const previous = this.store.getListState(item.listKey);
+          this.store.setList(
+            item.listKey,
+            this.mergeListState(previous, ids, cursors, pagination, {
+              ...getPaginationMergeInfo(item.argsPayload),
+              replace: true,
+            }),
+          );
+        }),
+      );
     });
   }
 
@@ -3092,6 +3153,13 @@ export class FateClient<
 
       const id = config.getId(record);
       const entityId = toEntityId(type, id);
+      const generation = this.applyingGeneration ?? ++this.writeGeneration;
+      if (
+        !this.store.isRecordingOptimistic &&
+        (this.writeVersions.get(JSON.stringify([entityId])) ?? 0) > generation
+      ) {
+        return entityId;
+      }
       const result: AnyRecord = {};
       const selectionTree = groupSelectionByPrefix(select);
 
@@ -3101,6 +3169,12 @@ export class FateClient<
           const fieldPath = pathPrefix ? `${pathPrefix}.${key}` : key;
           const fieldArgs = plan?.args.get(fieldPath);
           const storageKey = getFieldKey(fieldPath, plan);
+          if (
+            !Object.hasOwn(record, key) ||
+            !this.acceptWrite(JSON.stringify([entityId, storageKey]), generation)
+          ) {
+            continue;
+          }
           if (relationDescriptor === 'scalar') {
             if (!Object.hasOwn(record, key)) {
               continue;
@@ -3256,15 +3330,22 @@ export class FateClient<
       for (const [key, value] of Object.entries(record)) {
         if (!(key in (config.fields ?? {}))) {
           const fieldPath = pathPrefix ? `${pathPrefix}.${key}` : key;
-          result[getFieldKey(fieldPath, plan)] = value;
+          const storageKey = getFieldKey(fieldPath, plan);
+          if (this.acceptWrite(JSON.stringify([entityId, storageKey]), generation)) {
+            result[storageKey] = value;
+          }
         }
       }
 
       this.viewDataCache.invalidate(entityId);
-      this.store.merge(
-        entityId,
-        result,
-        [...select].map((path) => getStoragePath(path, plan, pathPrefix ?? '')),
+      this.withWriteGeneration(generation, () =>
+        this.store.merge(
+          entityId,
+          result,
+          [...select]
+            .map((path) => getStoragePath(path, plan, pathPrefix ?? ''))
+            .filter((path) => Object.hasOwn(result, path.split('.')[0])),
+        ),
       );
       this.linkParentLists(type, entityId, result, insert ?? 'after');
       if (!pathPrefix && insert) {
