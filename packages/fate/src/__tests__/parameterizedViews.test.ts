@@ -1,6 +1,7 @@
 import { expect, expectTypeOf, test, vi } from 'vite-plus/test';
 import { createClient } from '../client.ts';
 import { clientRoot } from '../root.ts';
+import { getSelectionPlan } from '../selection.ts';
 import type { SelectionOf, ViewData, ViewRef } from '../types.ts';
 import { view } from '../view.ts';
 
@@ -79,4 +80,25 @@ test('request descriptors and results stay stable across equivalent parameter ob
   expect(second).toBe(first);
   expect((await client.readView(Name, first.User)).data).toMatchObject({ name: 'ja' });
   expect(fetchById).toHaveBeenCalledTimes(1);
+});
+
+test('accepts parameter interfaces and snapshots caller-owned argument objects', async () => {
+  interface Parameters {
+    settings: { locale: string };
+  }
+  const InterfaceView = view<User>()(({ settings }: Parameters) => ({ name: { args: settings } }));
+  const parameters: Parameters = { settings: { locale: 'ja' } };
+  const bound = InterfaceView(parameters);
+  parameters.settings.locale = 'en';
+  const { client } = setup();
+  expect((await client.readView(InterfaceView, client.ref('User', '1', bound))).data).toMatchObject(
+    { name: 'ja' },
+  );
+});
+
+test('unbound definitions cannot silently disappear in spreads or nested selections', () => {
+  expect(() => ({ ...Name })).toThrow(/bind|parameter/i);
+  type Parent = { __typename: 'Parent'; child: User };
+  const Parent = view<Parent>()({ child: Name });
+  expect(() => getSelectionPlan(Parent, null)).toThrow(/bind|parameter/i);
 });

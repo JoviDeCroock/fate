@@ -478,3 +478,38 @@ test('conditional result types preserve booleans, nullability, and named fragmen
   };
   expect(checkTypes).toBeTypeOf('function');
 });
+
+test('restores parameterized named fragments from persistence without fetching inactive data', async () => {
+  const storage = memoryStorage();
+  const persistence = () => createPersistence({ key: 'conditional', online: () => false, storage });
+  const first = setup(persistence());
+  const request = () => ({ viewer: { view: ConditionalGames({ enabled: true }) } });
+  try {
+    await first.client.request(request());
+    await first.client.persistence!.flush();
+  } finally {
+    first.client.persistence!.dispose();
+  }
+  const restored = setup(persistence());
+  restored.fetch.mockRejectedValue(new Error('Offline'));
+  try {
+    const { viewer } = await restored.client.request(request());
+    const data = (
+      await restored.client.readView<
+        User,
+        SelectionOf<typeof ConditionalGames>,
+        typeof ConditionalGames
+      >(ConditionalGames, viewer!)
+    ).data;
+    const active = (
+      await restored.client.readView<User, SelectionOf<typeof BoundGames>, typeof BoundGames>(
+        BoundGames,
+        data.active!,
+      )
+    ).data;
+    expect(active.games!.items[0].node.id).toBe('Active-1');
+    expect(restored.fetch).not.toHaveBeenCalled();
+  } finally {
+    restored.client.persistence!.dispose();
+  }
+});

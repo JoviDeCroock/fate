@@ -108,6 +108,9 @@ export const getSelectionPlan = <T extends Entity, S extends Selection<T>, V ext
           ? `fate_fragment_${[...namespace, key].map((part) => `${part.length}_${part}`).join('_')}:${sourceField}`
           : resultField;
       const valueType = typeof value;
+      if (valueType === 'function') {
+        throw new Error('fate: Bind the view parameters before using a view in a selection.');
+      }
       const path = prefix ? `${prefix}.${field}` : field;
 
       if (context === 'connection') {

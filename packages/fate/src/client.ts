@@ -3554,7 +3554,7 @@ export class FateClient<
           const { id, type } = parseEntityId(parentId);
           const namedRef = this.stableRefWithViewNames(
             type,
-            (record.id as string | number) ?? id,
+            parentId === entityId ? ref.id : id,
             getViewNames(rawSelection.view),
           );
           target[key] = this.cacheOnlyRefs.has(ref) ? this.cacheOnlyResult(namedRef) : namedRef;

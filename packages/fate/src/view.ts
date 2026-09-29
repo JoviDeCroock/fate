@@ -21,7 +21,7 @@ const ParameterizedViewTag = Symbol('fate.parameterized-view');
 const boundViews = new WeakMap<ViewPayload<any, any>, View<any, any>>();
 const namePayloads = new WeakMap<ReadonlySet<string>, Map<string, ViewPayload<any, any>>>();
 
-export type ParameterizedView<T extends Entity, P extends AnyRecord, S extends Selection<T>> = View<
+export type ParameterizedView<T extends Entity, P extends object, S extends Selection<T>> = View<
   T,
   S
 > &
@@ -154,7 +154,7 @@ export function view<T extends Entity>() {
   function define<const S extends Selection<T>>(
     select: S & ValidateSelection<T, S>,
   ): View<T, MutableSelection<T, S>>;
-  function define<P extends AnyRecord, const S extends Selection<T>>(
+  function define<P extends object, const S extends Selection<T>>(
     select: (parameters: P) => S & ValidateSelection<T, S>,
   ): ParameterizedView<T, P, MutableSelection<T, S>>;
   function define(select: Selection<T> | ((parameters: AnyRecord) => Selection<T>)) {
@@ -172,6 +172,12 @@ export function view<T extends Entity>() {
         return create(select(cloned), getViewTag(`${viewId}:${key}`), tag);
       };
       Object.defineProperty(bind, ParameterizedViewTag, { value: tag });
+      Object.defineProperty(bind, tag, {
+        enumerable: true,
+        get() {
+          throw new Error('fate: Bind the view parameters before spreading a view.');
+        },
+      });
       return Object.freeze(bind);
     }
     return create(select, tag);

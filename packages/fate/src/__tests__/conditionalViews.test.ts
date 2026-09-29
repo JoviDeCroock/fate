@@ -126,3 +126,24 @@ test('cache-only named refs cannot fetch and do not poison ordinary refs', async
   expect((await client.readView(Name, normalData.first)).data).toMatchObject({ name: 'en' });
   expect(fetchById).toHaveBeenCalledTimes(3);
 });
+
+test('named fragment refs preserve the owner identity with a custom entity ID', async () => {
+  const SimpleName = view<User>()({ name: true });
+  const Parent = view<User>()({ details: alias(SimpleName) });
+  const fetchById = vi.fn(async () => []);
+  const client = createClient({
+    roots: {},
+    transport: { fetchById },
+    types: [{ getId: (record) => (record as { slug: string }).slug, type: 'User' }],
+  });
+  client.write('User', { id: 'unrelated-id', name: 'Ada', slug: 'owner' }, new Set(['name']));
+  const data = (
+    await client.readView<User, SelectionOf<typeof Parent>, typeof Parent>(
+      Parent,
+      client.ref('User', 'owner', Parent),
+    )
+  ).data;
+  expect(data.details.id).toBe('owner');
+  expect((await client.readView(SimpleName, data.details)).data).toMatchObject({ name: 'Ada' });
+  expect(fetchById).not.toHaveBeenCalled();
+});
