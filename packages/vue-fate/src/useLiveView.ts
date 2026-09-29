@@ -86,7 +86,6 @@ export function useLiveView<V extends View<any, any>>(
         }
 
         const client = clientSource.value;
-        client.assertLiveViewSupport();
         liveUnsubscribe = client.subscribeLiveView(
           view,
           client.ref(resolvedRef.__typename, resolvedRef.id, resolveView(view, resolvedRef)),

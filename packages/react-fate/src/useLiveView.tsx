@@ -60,7 +60,6 @@ export function useLiveView<V extends View<any, any>>(
       return;
     }
 
-    client.assertLiveViewSupport();
     return client.subscribeLiveView(view, liveRef);
   });
 

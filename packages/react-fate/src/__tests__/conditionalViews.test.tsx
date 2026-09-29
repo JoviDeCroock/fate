@@ -74,7 +74,10 @@ test('undefined and null refs preserve their types and never fetch or subscribe'
   const subscribe = vi.spyOn(client.store, 'subscribe');
   const element = document.createElement('div');
   const root = createRoot(element);
+  const Hidden = view<User>()({ name: when(false, true) });
   function Component() {
+    const hidden = useLiveView(Hidden, client.ref('User', '1', Hidden));
+    expect(hidden.name).toBeUndefined();
     const absent = useView(Name, undefined);
     const empty = useView(Name, null);
     const live = useLiveView(Name, undefined);

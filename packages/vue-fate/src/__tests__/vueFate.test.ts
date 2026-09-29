@@ -22,6 +22,7 @@ import { createApp, defineComponent, h, nextTick, ref } from 'vue';
 import type { ShallowRef } from 'vue';
 import {
   alias,
+  when,
   FateClient,
   useFateClient,
   useListView,
@@ -855,7 +856,6 @@ test('supports public aliases in Vue requests and reactive views', async () => {
 });
 
 test('conditional named views preserve bindings and undefined results across reactive toggles', async () => {
-  const { when } = await import('../index.ts');
   const Name = view<User>()(({ locale }: { locale: string }) => ({ name: { args: { locale } } }));
   const Parent = view<User>()(({ enabled }: { enabled: boolean }) => ({
     details: when(enabled, alias(Name({ locale: 'ja' }))),
@@ -938,8 +938,10 @@ test('Vue preserves null and undefined through optional view resources', async (
   const fetchById = vi.fn(async () => []);
   const client = createClient({ roots: {}, transport: { fetchById }, types: [{ type: 'User' }] });
   const subscribe = vi.spyOn(client.store, 'subscribe');
+  const Hidden = view<User>()({ name: when(false, true) });
   const Component = defineComponent({
     setup() {
+      useLiveView(Hidden, client.ref('User', '1', Hidden));
       const absent = useView(Name, undefined);
       const empty = useView(Name, null);
       expectTypeOf(absent.value).toEqualTypeOf<undefined>();

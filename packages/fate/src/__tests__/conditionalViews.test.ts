@@ -147,3 +147,11 @@ test('named fragment refs preserve the owner identity with a custom entity ID', 
   expect((await client.readView(SimpleName, data.details)).data).toMatchObject({ name: 'Ada' });
   expect(fetchById).not.toHaveBeenCalled();
 });
+
+test('fully inactive live views need no transport subscription or live support', () => {
+  const Hidden = view<User>()({ name: when(false, true) });
+  const { client } = setup();
+  const dispose = client.subscribeLiveView(Hidden, client.ref('User', '1', Hidden));
+  expect(dispose).toBeTypeOf('function');
+  dispose();
+});

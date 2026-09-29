@@ -1382,7 +1382,6 @@ export class FateClient<
   ): () => void {
     view = resolveView(view, ref);
     this.assertPersistenceActive();
-    this.assertLiveViewSupport();
 
     const id = ref.id;
     const type = ref.__typename;
@@ -1411,6 +1410,10 @@ export class FateClient<
 
     const entityId = toEntityId(type, id);
     const plan = getSelectionPlan(view, ref, { includeNestedViews: true });
+    if (plan.paths.size === 0) {
+      return () => {};
+    }
+    this.assertLiveViewSupport();
     const key = this.liveSubscriptionKey(entityId, plan);
     const existing = this.liveSubscriptions.get(key);
     if (existing) {
