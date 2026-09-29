@@ -506,14 +506,15 @@ const buildRecordSelection = ({
 };
 
 const relayToFateConnection = (value: unknown) => {
-  if (!isRecord(value) || !Array.isArray(value.edges)) {
+  if (!isRecord(value) || (value.edges !== null && !Array.isArray(value.edges))) {
     return value;
   }
 
   const pageInfo = isRecord(value.pageInfo) ? value.pageInfo : {};
+  const edges = Array.isArray(value.edges) ? value.edges : [];
 
   return {
-    items: value.edges.flatMap((edge) =>
+    items: edges.flatMap((edge) =>
       isRecord(edge)
         ? [
             {

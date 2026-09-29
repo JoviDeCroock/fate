@@ -350,6 +350,41 @@ test('preserves nullable root connections through caching and hydration', async 
   expect(fetch).toHaveBeenCalledTimes(1);
 });
 
+test('treats null Relay edges as an empty window with page information', async () => {
+  const fetch = vi.fn(async () =>
+    jsonResponse({
+      data: {
+        f1: {
+          edges: null,
+          pageInfo: {
+            endCursor: null,
+            hasNextPage: false,
+            hasPreviousPage: true,
+            startCursor: 'before',
+          },
+        },
+      },
+    }),
+  );
+  const transport = createGraphQLTransport({
+    fetch,
+    live: false,
+    roots: { posts: { connection: 'relay', type: 'Post' } },
+    types: [{ type: 'Post' }],
+    url: '/graphql',
+  });
+
+  await expect(transport.fetchList?.('posts', new Set(['id']))).resolves.toEqual({
+    items: [],
+    pagination: {
+      hasNext: false,
+      hasPrevious: true,
+      nextCursor: undefined,
+      previousCursor: 'before',
+    },
+  });
+});
+
 test('fetches nodes through the Relay nodes field and decodes global ids', async () => {
   const fetch = vi.fn(async () =>
     jsonResponse({
