@@ -135,6 +135,70 @@ test('selects embedded objects without requesting entity identity fields', async
   expect(query).toContain('character { color url }');
 });
 
+test('fetches and caches ID-less object query roots with nested selections', async () => {
+  const schema = buildSchema(
+    `type Query { prices(locale: String!): Price } type Price { amount: Int! currency: String! details: PriceDetails } type PriceDetails { label: String! }`,
+  );
+  const fetch = vi.fn(async () =>
+    jsonResponse({
+      data: {
+        f1: {
+          amount: 42,
+          currency: 'USD',
+          details: { label: 'Standard' },
+        },
+      },
+    }),
+  );
+  const transport = createGraphQLTransport({
+    fetch,
+    live: false,
+    roots: { prices: { embedded: true, type: 'Price' } },
+    schema: createGraphQLArgumentSchema(schema),
+    types: [
+      { fields: { details: { embedded: 'PriceDetails' } }, type: 'Price' },
+      { type: 'PriceDetails' },
+    ],
+    url: '/graphql',
+  });
+  const roots = {
+    prices: clientValueRoot<
+      { amount: number; currency: string; details: { label: string } },
+      { locale: string }
+    >(),
+  };
+  const client = createClient({ roots, transport, types: [] });
+  const request = {
+    prices: {
+      args: { locale: 'en' },
+      value: { amount: true, currency: true, details: { label: true } },
+    },
+  } as const;
+
+  await expect(client.request(request)).resolves.toEqual({
+    prices: {
+      amount: 42,
+      currency: 'USD',
+      details: { label: 'Standard' },
+    },
+  });
+  await client.request(request);
+  expect(fetch).toHaveBeenCalledTimes(1);
+  const query = getRequestBody(fetch).query;
+  expect(validate(schema, parse(query))).toEqual([]);
+  expect(query).toContain('details { label }');
+  const restored = createClient({ roots, transport, types: [] });
+  restored.hydrate(client.dehydrate());
+  await expect(restored.request(request)).resolves.toEqual({
+    prices: {
+      amount: 42,
+      currency: 'USD',
+      details: { label: 'Standard' },
+    },
+  });
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
 test('fetches nodes through the Relay nodes field and decodes global ids', async () => {
   const fetch = vi.fn(async () =>
     jsonResponse({

@@ -11,8 +11,12 @@ import { createSchema, isDataView } from './schema.ts';
 type ModuleExports = Record<string, any>;
 type ClientModule = '@nkzw/fate' | 'react-fate' | 'vue-fate';
 
-const formatRelation = (value: { listOf?: string; type?: string }) =>
-  'listOf' in value ? `{ listOf: '${value.listOf}' }` : `{ type: '${value.type}' }`;
+const formatRelation = (value: { embedded?: string; listOf?: string; type?: string }) =>
+  'listOf' in value
+    ? `{ listOf: '${value.listOf}' }`
+    : 'embedded' in value
+      ? `{ embedded: '${value.embedded}' }`
+      : `{ type: '${value.type}' }`;
 
 const formatTypes = (types: ReadonlyArray<{ fields?: Record<string, any>; type: string }>) => {
   if (!types.length) {
@@ -415,9 +419,16 @@ const createGraphQLClientSource = ({
   );
   const graphQLConfig = (moduleExports[graphQLConfigExportName] ?? {}) as {
     mutations?: Record<string, { entity: string; field: string; inputArg?: false | string }>;
-    roots?: Record<string, { field?: string }>;
+    roots?: Record<string, { embedded?: boolean; field?: string; type?: string }>;
     schema?: string | GraphQLSchema;
+    types?: ReadonlyArray<{ fields?: Record<string, any>; type: string }>;
   };
+  const transportTypes = [
+    ...types,
+    ...(graphQLConfig.types ?? []).filter(
+      (entry) => !types.some((type) => type.type === entry.type),
+    ),
+  ];
 
   const argumentSchema = graphQLConfig.schema
     ? createGraphQLArgumentSchema(graphQLConfig.schema)
@@ -450,7 +461,7 @@ const createGraphQLClientSource = ({
     return graphQLTypeScriptType(input.type, argumentSchema);
   };
   if (argumentSchema) {
-    for (const [name] of Object.entries(roots)) {
+    for (const [name] of Object.entries({ ...roots, ...graphQLConfig.roots })) {
       const field = graphQLConfig.roots?.[name]?.field ?? name;
       if (!argumentSchema.fields[argumentSchema.queryType]?.[field]) {
         throw new Error(`fate(graphql): Unknown query field '${field}'.`);
@@ -514,18 +525,27 @@ ${Object.entries(argumentSchema.fields[type] ?? {})
       type,
       value: `'${name}': clientRoot<Array<${type}>, '${type}'>('${type}'),`,
     })),
-    ...Object.entries(roots).map(([name, root]) => ({
-      name,
-      type: root.type,
-      value: `'${name}': clientRoot<${
-        root.kind === 'list'
-          ? `{
+    ...Object.entries(roots)
+      .filter(([name]) => !graphQLConfig.roots?.[name]?.embedded)
+      .map(([name, root]) => ({
+        name,
+        type: root.type,
+        value: `'${name}': clientRoot<${
+          root.kind === 'list'
+            ? `{
   items: Array<{ cursor?: string; node: ${root.type} }>;
   pagination: import('${clientModule}').Pagination;
 }`
-          : `${root.type} | null`
-      }, '${root.type}'${rootArgumentsType(name, root.type)}>('${root.type}'),`,
-    })),
+            : `${root.type} | null`
+        }, '${root.type}'${rootArgumentsType(name, root.type)}>('${root.type}'),`,
+      })),
+    ...Object.entries(graphQLConfig.roots ?? {})
+      .filter(([, root]) => root.embedded)
+      .map(([name]) => ({
+        name,
+        type: '__value__',
+        value: `'${name}': clientValueRoot<GraphQLRootOutput<typeof ${graphQLConfigExportName}.roots['${name}']>, GraphQLRootInput<typeof ${graphQLConfigExportName}.roots['${name}']>>(),`,
+      })),
   ].sort((a, b) => a.name.localeCompare(b.name));
 
   const importedTypes = Array.from(
@@ -534,7 +554,9 @@ ${Object.entries(argumentSchema.fields[type] ?? {})
       ...mutationEntries
         .filter((entry) => entry.entity !== '__value__')
         .map((entry) => entry.entity),
-      ...(mutationEntries.length || (!argumentSchema && graphQLConfig.mutations)
+      ...(mutationEntries.length ||
+      Object.values(graphQLConfig.roots ?? {}).some((root) => root.embedded) ||
+      (!argumentSchema && graphQLConfig.mutations)
         ? [graphQLConfigExportName]
         : []),
     ]),
@@ -554,12 +576,18 @@ ${Object.entries(argumentSchema.fields[type] ?? {})
   );
 
   const graphQLRoots = Object.fromEntries(
-    Object.entries(roots).map(([name, root]) => [
+    Object.entries({
+      ...roots,
+      ...Object.fromEntries(
+        Object.entries(graphQLConfig.roots ?? {}).filter(([, root]) => root.embedded),
+      ),
+    }).map(([name, root]) => [
       name,
       {
-        connection: root.kind === 'list' ? 'relay' : undefined,
+        connection: 'kind' in root && root.kind === 'list' ? 'relay' : undefined,
+        embedded: graphQLConfig.roots?.[name]?.embedded,
         field: graphQLConfig.roots?.[name]?.field,
-        type: root.type,
+        type: graphQLConfig.roots?.[name]?.type ?? root.type,
       },
     ]),
   );
@@ -581,7 +609,7 @@ ${Object.entries(argumentSchema.fields[type] ?? {})
 
   const typesBlock = indentBlock(
     formatTypes(
-      types as ReadonlyArray<{
+      transportTypes as ReadonlyArray<{
         fields?: Record<string, any>;
         type: string;
       }>,
@@ -611,7 +639,7 @@ declare module '${clientDeclarationModule}' {
     : '';
 
   return `// @generated by @nkzw/fate/vite
-${typeImportLine}import { clientRoot, createClient, createGraphQLTransport${mutationEntries.some((entry) => entry.entity !== '__value__') ? ', mutation' : ''}${mutationEntries.some((entry) => entry.entity === '__value__') ? ', valueMutation' : ''}${mutationEntries.length ? ', type GraphQLMutationOutput' : ''}${!argumentSchema && graphQLConfig.mutations ? ', type GraphQLMutationMap' : ''}${!argumentSchema && mutationEntries.length ? ', type GraphQLMutationInput' : ''} } from '${clientModule}';
+${typeImportLine}import { clientRoot, createClient, createGraphQLTransport${Object.values(graphQLConfig.roots ?? {}).some((root) => root.embedded) ? ', clientValueRoot, type GraphQLRootInput, type GraphQLRootOutput' : ''}${mutationEntries.some((entry) => entry.entity !== '__value__') ? ', mutation' : ''}${mutationEntries.some((entry) => entry.entity === '__value__') ? ', valueMutation' : ''}${mutationEntries.length ? ', type GraphQLMutationOutput' : ''}${!argumentSchema && graphQLConfig.mutations ? ', type GraphQLMutationMap' : ''}${!argumentSchema && mutationEntries.length ? ', type GraphQLMutationInput' : ''} } from '${clientModule}';
 
 ${argumentSchema ? graphQLArgumentContracts(argumentSchema) : ''}
 ${selectionArguments}

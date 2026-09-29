@@ -360,7 +360,7 @@ export type QueryItem<V extends View<any, any>> = Readonly<{
 
 export type ValueItem = Readonly<{
   args?: Record<string, unknown>;
-  value: true;
+  value: true | Record<string, unknown>;
 }>;
 
 /** Definition of a node request with one explicit ID for fetching data from the backend. */

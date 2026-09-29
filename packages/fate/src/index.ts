@@ -51,6 +51,9 @@ export type {
   GraphQLMutationInput,
   GraphQLMutationMap,
   GraphQLMutationOutput,
+  GraphQLRootInput,
+  GraphQLRootOutput,
+  GraphQLValueRootDefinition,
   GraphQLTransportOptions,
 } from './graphqlTransport.ts';
 
@@ -62,6 +65,7 @@ export {
   createGraphQLTransport,
   graphqlMutation,
   graphqlValueMutation,
+  graphqlValueRoot,
 } from './graphqlTransport.ts';
 export { createHTTPTransport } from './httpTransport.ts';
 export { liveConnectionTopic, liveEntityTopic, liveGlobalConnectionTopic } from './liveTopics.ts';

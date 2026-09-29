@@ -1,5 +1,5 @@
 import { expect, test } from 'vite-plus/test';
-import { graphqlMutation, graphqlValueMutation } from '../../graphqlTransport.ts';
+import { graphqlMutation, graphqlValueMutation, graphqlValueRoot } from '../../graphqlTransport.ts';
 import { dataView, list } from '../../server/dataView.ts';
 import { createSourceRegistry } from '../../server/executor.ts';
 import { createFateServer } from '../../server/http.ts';
@@ -38,6 +38,31 @@ test('generates value mutations without importing an entity type', () => {
 
   expect(source).toContain('valueMutation<');
   expect(source).not.toContain('import type { __value__');
+});
+
+test('generates an ID-less object root as a cached value root', () => {
+  const source = createClientSource({
+    moduleExports: {
+      fateGraphQL: {
+        roots: {
+          prices: graphqlValueRoot<{ amount: number }, { locale: string }>({ type: 'Price' }),
+        },
+        schema: 'type Query { prices(locale: String!): Price } type Price { amount: Int! }',
+        types: [{ type: 'Price' }],
+      },
+      Root: {},
+    },
+    moduleName: '@org/shop',
+    transport: 'graphql',
+  });
+
+  expect(source).toContain(
+    "'prices': clientValueRoot<GraphQLRootOutput<typeof fateGraphQL.roots['prices']>",
+  );
+  expect(source).toContain('"embedded": true');
+  expect(source).toContain('"type": "Price"');
+  expect(source).toContain("type: 'Price'");
+  expect(source).not.toContain('import type { Price');
 });
 
 test('generates the same client source for the Prisma and Drizzle examples', async () => {

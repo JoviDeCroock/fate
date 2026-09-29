@@ -20,9 +20,27 @@ type EventSourceConstructor = new (
 
 type GraphQLRootConfig = {
   connection?: 'relay';
+  embedded?: boolean;
   field?: string;
   type: string;
 };
+
+export type GraphQLValueRootDefinition<Output = unknown, Input = unknown> = GraphQLRootConfig & {
+  readonly __fateGraphQLRoot?: { input: Input; output: Output };
+  embedded: true;
+};
+
+export type GraphQLRootInput<Definition> =
+  Definition extends GraphQLValueRootDefinition<infer _Output, infer Input> ? Input : never;
+export type GraphQLRootOutput<Definition> =
+  Definition extends GraphQLValueRootDefinition<infer Output, infer _Input> ? Output : never;
+
+export function graphqlValueRoot<Output, Input = Record<string, never>>(options: {
+  field?: string;
+  type: string;
+}): GraphQLValueRootDefinition<Output, Input> {
+  return Object.freeze({ ...options, embedded: true }) as GraphQLValueRootDefinition<Output, Input>;
+}
 
 export type GraphQLMutationDefinition<
   T extends Entity = Entity,
@@ -390,6 +408,7 @@ type ArgumentsForField = (
 const buildRecordSelection = ({
   args,
   argumentsForField,
+  embedded,
   path,
   select,
   type,
@@ -397,6 +416,7 @@ const buildRecordSelection = ({
 }: {
   args?: Record<string, unknown>;
   argumentsForField: ArgumentsForField;
+  embedded?: boolean;
   path: string;
   select: Iterable<string>;
   type: string;
@@ -470,7 +490,7 @@ const buildRecordSelection = ({
     return lines.join(' ');
   };
 
-  return walk(type, tree, path);
+  return walk(type, tree, path, embedded);
 };
 
 const relayToFateConnection = (value: unknown) => {
@@ -861,6 +881,7 @@ export function createGraphQLTransport<
           : buildRecordSelection({
               args,
               argumentsForField,
+              embedded: root.embedded,
               path: '',
               select,
               type: root.type,

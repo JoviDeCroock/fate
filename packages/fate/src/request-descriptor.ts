@@ -195,13 +195,16 @@ export const createRequestDescriptor = (
     const type = getRootType(name);
 
     if (isValueItem(item)) {
-      const plan = { args: new Map(), live: new Map(), paths: new Set<string>() };
+      const plan =
+        item.value === true
+          ? { args: new Map(), live: new Map(), paths: new Set<string>() }
+          : getSelectionPlan(item.value as View<any, any>, null);
       items.push({
         argsPayload: item.args,
         kind: 'value',
         name,
         plan,
-        queryKey: getRootDescriptorKey(name, item.args, plan),
+        queryKey: `${getRootDescriptorKey(name, item.args, plan)}#${[...plan.paths].sort().join(',')}`,
         refViewNames: new Set(),
         type,
       });

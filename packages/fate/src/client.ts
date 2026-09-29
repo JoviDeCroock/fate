@@ -2890,7 +2890,7 @@ export class FateClient<
       throw new Error(`fate: transport does not support value queries for '${item.name}'.`);
     }
     const value = await this.trackPendingRequest(() =>
-      this.transport.fetchQuery!(item.name, new Set(), item.argsPayload),
+      this.transport.fetchQuery!(item.name, item.plan.paths, item.argsPayload),
     );
     this.assertPersistenceActive();
     this.rootValues.set(item.queryKey, value);
