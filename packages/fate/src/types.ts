@@ -120,7 +120,7 @@ export type RelationDescriptor =
   /** Field contains an object without entity identity. */
   | { embedded: string }
   /** Field holds a list of entities of the given type. */
-  | { listOf: string };
+  | { array?: boolean; listOf: string };
 
 /** Configuration for a server entity type used by the client cache. */
 export type TypeConfig = {

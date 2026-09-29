@@ -476,6 +476,12 @@ const buildRecordSelection = ({
       }
 
       if (descriptor && typeof descriptor === 'object' && 'listOf' in descriptor) {
+        if (descriptor.array) {
+          lines.push(
+            `${fieldName}${fieldArguments} { ${walk(descriptor.listOf, childTree, fieldPath)} }`,
+          );
+          continue;
+        }
         lines.push(
           `${fieldName}${fieldArguments} { edges { cursor node { ${walk(
             descriptor.listOf,

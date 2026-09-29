@@ -243,6 +243,49 @@ test('returns selected ID-less object mutation payloads', async () => {
   expect(query).toContain('receipt { code }');
 });
 
+test('selects ordinary entity arrays without a Relay connection wrapper', async () => {
+  const schema = buildSchema(
+    `type Query { game: Game } type Game { id: ID! messages: [Message!]! } type Message { id: ID! text: String! }`,
+  );
+  const fetch = vi.fn(async () =>
+    jsonResponse({
+      data: {
+        f1: {
+          __typename: 'Game',
+          id: 'Game-1',
+          messages: [
+            { __typename: 'Message', id: 'Message-2', text: 'Hello' },
+            { __typename: 'Message', id: 'Message-1', text: 'World' },
+          ],
+        },
+      },
+    }),
+  );
+  const transport = createGraphQLTransport({
+    fetch,
+    live: false,
+    roots: { game: { type: 'Game' } },
+    types: [
+      { fields: { messages: { array: true, listOf: 'Message' } }, type: 'Game' },
+      { type: 'Message' },
+    ],
+    url: '/graphql',
+  });
+
+  await expect(
+    transport.fetchQuery?.('game', new Set(['messages.id', 'messages.text'])),
+  ).resolves.toMatchObject({
+    messages: [
+      { id: '2', text: 'Hello' },
+      { id: '1', text: 'World' },
+    ],
+  });
+  const query = getRequestBody(fetch).query;
+  expect(validate(schema, parse(query))).toEqual([]);
+  expect(query).toContain('messages { __typename id text }');
+  expect(query).not.toContain('messages { edges');
+});
+
 test('fetches nodes through the Relay nodes field and decodes global ids', async () => {
   const fetch = vi.fn(async () =>
     jsonResponse({

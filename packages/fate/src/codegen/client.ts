@@ -11,9 +11,14 @@ import { createSchema, isDataView } from './schema.ts';
 type ModuleExports = Record<string, any>;
 type ClientModule = '@nkzw/fate' | 'react-fate' | 'vue-fate';
 
-const formatRelation = (value: { embedded?: string; listOf?: string; type?: string }) =>
+const formatRelation = (value: {
+  array?: boolean;
+  embedded?: string;
+  listOf?: string;
+  type?: string;
+}) =>
   'listOf' in value
-    ? `{ listOf: '${value.listOf}' }`
+    ? `{ listOf: '${value.listOf}'${value.array ? ', array: true' : ''} }`
     : 'embedded' in value
       ? `{ embedded: '${value.embedded}' }`
       : `{ type: '${value.type}' }`;
