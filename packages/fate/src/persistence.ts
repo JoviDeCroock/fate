@@ -402,7 +402,7 @@ class Session implements PersistenceRuntime {
     const operation = prepareMutation(
       this.client,
       command,
-      this.client.getTypeConfig(command.entity),
+      command.entity === '__value__' ? undefined : this.client.getTypeConfig(command.entity),
       true,
     );
     const { promise, resolve } = Promise.withResolvers<void>();

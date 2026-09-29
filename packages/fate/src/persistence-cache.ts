@@ -307,11 +307,12 @@ export class PersistenceCache {
     const previousCoverage = new Map(previous?.coverage);
     const previousLists = new Map(previous?.lists);
     const ids = new Set<string>(previousRecords.keys());
-    const config = this.client.getTypeConfig(command.entity);
+    const config =
+      command.entity === '__value__' ? undefined : this.client.getTypeConfig(command.entity);
     for (const input of [command.input, command.optimistic]) {
       if (input) {
         try {
-          const id = config.getId(input);
+          const id = config?.getId(input);
           if (id != null) {
             ids.add(toEntityId(command.entity, id));
           }

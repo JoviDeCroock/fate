@@ -33,6 +33,10 @@ export function mutation<T extends Entity, I, R>(
   }) as MutationDefinition<T, I, R>;
 }
 
+export function valueMutation<I, R>(): MutationDefinition<{ __typename: '__value__' }, I, R> {
+  return mutation<{ __typename: '__value__' }, I, R>('__value__');
+}
+
 /** Where (or if) to insert the resulting record into relevant lists. */
 export type InsertPosition = 'after' | 'before' | 'none';
 /**
@@ -178,10 +182,22 @@ export type MutationCommand = {
 export function prepareMutation(
   client: FateClient<any, any>,
   command: MutationCommand,
-  config: TypeConfig,
+  config: TypeConfig | undefined,
   durable = false,
 ) {
   const { args, delete: deleteRecord, entity, input, insert, key, optimistic, plan } = command;
+  if (!config) {
+    if (deleteRecord || optimistic || plan) {
+      throw new Error(`fate: Value mutation '${key}' does not support entity updates.`);
+    }
+    return {
+      commit: (_result: unknown) => {},
+      entityId: null,
+      execute: (identity?: MutationIdentity) =>
+        client.executeMutation(key, input, new Set(), { args, identity }),
+      rollback: () => {},
+    };
+  }
   const id = maybeGetId(config.getId, input);
   const optimisticRecord = optimistic
     ? id != null
@@ -245,7 +261,8 @@ export function wrapMutation<
   I extends MutationIdentifier<any, any, any>,
   M extends Record<string, MutationDefinition<any, any, any>>,
 >(client: FateClient<any, M>, identifier: I): MutationFunction<I> {
-  const config = client.getTypeConfig(identifier.entity);
+  const config =
+    identifier.entity === '__value__' ? undefined : client.getTypeConfig(identifier.entity);
 
   return async ({
     args,

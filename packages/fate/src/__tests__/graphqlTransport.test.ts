@@ -3,6 +3,7 @@ import { beforeEach, expect, test, vi } from 'vite-plus/test';
 import { createClient } from '../client.ts';
 import { createGraphQLArgumentSchema } from '../codegen/graphql.ts';
 import { createGraphQLTransport } from '../graphqlTransport.ts';
+import { valueMutation } from '../mutation.ts';
 import { clientValueRoot } from '../root.ts';
 
 const graphQLSSE = vi.hoisted(() => ({
@@ -68,6 +69,34 @@ test('fetches and caches scalar query roots without entity identities', async ()
   expect(query).not.toContain('origin {');
   expect(query).not.toContain('stars {');
   expect(query).not.toContain('fetchReplay {');
+});
+
+test('returns scalar mutation results without requiring an entity record', async () => {
+  const fetch = vi.fn(async () => jsonResponse({ data: { f1: false } }));
+  const transport = createGraphQLTransport<{ endGame: { input: { id: string }; output: boolean } }>(
+    {
+      fetch,
+      live: false,
+      mutations: { endGame: { entity: '__value__', field: 'endGame', inputArg: false } },
+      types: [],
+      url: '/graphql',
+    },
+  );
+  const mutations = { endGame: valueMutation<{ id: string }, boolean>() };
+  const roots = {};
+  const client = createClient<[typeof roots, typeof mutations]>({
+    mutations,
+    roots,
+    transport,
+    types: [],
+  });
+
+  await expect(client.mutations.endGame({ input: { id: 'Game-1' } })).resolves.toEqual({
+    error: undefined,
+    result: false,
+  });
+  expect(getRequestBody(fetch).query).toContain('endGame(id: "Game-1")');
+  expect(getRequestBody(fetch).query).not.toContain('endGame(id: "Game-1") {');
 });
 
 test('fetches nodes through the Relay nodes field and decodes global ids', async () => {

@@ -58,7 +58,11 @@ export { createClient, FateClient } from './client.ts';
 export { ConnectionTag, DeferTag, DeferredTag, isViewTag } from './types.ts';
 export { defer, getDeferredMetadata, isDeferred } from './defer.ts';
 export { createTRPCTransport } from './transport.ts';
-export { createGraphQLTransport, graphqlMutation } from './graphqlTransport.ts';
+export {
+  createGraphQLTransport,
+  graphqlMutation,
+  graphqlValueMutation,
+} from './graphqlTransport.ts';
 export { createHTTPTransport } from './httpTransport.ts';
 export { liveConnectionTopic, liveEntityTopic, liveGlobalConnectionTopic } from './liveTopics.ts';
 export { getListEntries } from './list.ts';
@@ -74,7 +78,7 @@ export type {
 } from './protocol.ts';
 export { getSelectionPlan } from './selection.ts';
 export { isRecord } from './record.ts';
-export { mutation } from './mutation.ts';
+export { mutation, valueMutation } from './mutation.ts';
 export { clientRoot, clientValueRoot } from './root.ts';
 export { toEntityId } from './ref.ts';
 export { view } from './view.ts';

@@ -1,5 +1,5 @@
 import { expect, test } from 'vite-plus/test';
-import { graphqlMutation } from '../../graphqlTransport.ts';
+import { graphqlMutation, graphqlValueMutation } from '../../graphqlTransport.ts';
 import { dataView, list } from '../../server/dataView.ts';
 import { createSourceRegistry } from '../../server/executor.ts';
 import { createFateServer } from '../../server/http.ts';
@@ -17,6 +17,28 @@ const setExampleEnv = () => {
   process.env.DATABASE_URL ??= 'postgresql://fate:echo@localhost:5432/fate';
   process.env.VITE_SERVER_URL ??= 'http://localhost:9020';
 };
+
+test('generates value mutations without importing an entity type', () => {
+  const source = createClientSource({
+    moduleExports: {
+      fateGraphQL: {
+        mutations: {
+          endGame: graphqlValueMutation<{ id: string }, boolean>({
+            field: 'endGame',
+            inputArg: false,
+          }),
+        },
+        schema: 'type Query { origin: Boolean! } type Mutation { endGame(id: ID!): Boolean! }',
+      },
+      Root: {},
+    },
+    moduleName: '@org/game',
+    transport: 'graphql',
+  });
+
+  expect(source).toContain('valueMutation<');
+  expect(source).not.toContain('import type { __value__');
+});
 
 test('generates the same client source for the Prisma and Drizzle examples', async () => {
   setExampleEnv();

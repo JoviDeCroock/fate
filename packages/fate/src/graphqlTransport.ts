@@ -606,6 +606,13 @@ export function graphqlMutation<T extends Entity, Input, Output>(
   }) as GraphQLMutationDefinition<T, Input, Output>;
 }
 
+export function graphqlValueMutation<Input, Output>(options: {
+  field: string;
+  inputArg?: false | string;
+}): GraphQLMutationDefinition<{ __typename: '__value__' }, Input, Output> {
+  return graphqlMutation<{ __typename: '__value__' }, Input, Output>('__value__', options);
+}
+
 export function createGraphQLTransport<
   Mutations extends TransportMutations = EmptyTransportMutations,
 >({
@@ -876,18 +883,21 @@ export function createGraphQLTransport<
         mutation.inputArg === false
           ? ((mutationInput ?? {}) as Record<string, unknown>)
           : { [mutation.inputArg ?? 'input']: mutationInput };
-      const selection = buildRecordSelection({
-        args: isRecord(selectionArgs) ? selectionArgs : undefined,
-        argumentsForField,
-        path: '',
-        select,
-        type: mutation.entity,
-        types,
-      });
+      const selection =
+        mutation.entity === '__value__'
+          ? ''
+          : buildRecordSelection({
+              args: isRecord(selectionArgs) ? selectionArgs : undefined,
+              argumentsForField,
+              path: '',
+              select,
+              type: mutation.entity,
+              types,
+            });
 
       return enqueue({
         kind: 'mutation',
-        selection: `${field}${argumentsForField(schema?.mutationType ?? 'Mutation', field, args)} { ${selection} }`,
+        selection: `${field}${argumentsForField(schema?.mutationType ?? 'Mutation', field, args)}${selection ? ` { ${selection} }` : ''}`,
         transform: (value) =>
           normalizeGraphQLValue({
             decodeNodeId,
