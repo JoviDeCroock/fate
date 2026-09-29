@@ -1400,7 +1400,11 @@ export class FateClient<
     this.assertLiveConnectionSupport();
 
     const plan = getSelectionPlan(view, null);
-    const connectionArgs = filterConnectionArgs(connection.args);
+    const connectionArgs = filterConnectionArgs(
+      connection.root
+        ? connection.args
+        : { ...connection.args, id: parseEntityId(connection.owner).id },
+    );
     const selectionArgs = resolvedArgsFromPlan(plan);
     const key = this.liveConnectionSubscriptionKey(connection, plan, connectionArgs);
     const existing = this.liveSubscriptions.get(key);
@@ -2024,9 +2028,6 @@ export class FateClient<
 
     const owner = parseEntityId(connection.owner);
     const requestArgs = omitUndefinedValues({ ...connection.args, ...args });
-    if (requestArgs.id === undefined && owner.id) {
-      requestArgs.id = owner.id;
-    }
 
     const { argsPayload, plan } = resolveSelectionPlan(view, requestArgs);
     const nodeSelection = plan.paths;
@@ -3395,21 +3396,11 @@ export class FateClient<
                   connection.pagination = undefined;
                 }
               }
-              const { id: ownerRawId, type: parentType } = parseEntityId(parentId);
+              const { type: parentType } = parseEntityId(parentId);
               if (parentType) {
                 const childType = this.getListNodeType(parentType, key);
-                const metadataArgs = (() => {
-                  if (!fieldArgs?.value && ownerRawId === undefined) {
-                    return undefined;
-                  }
-                  const value = fieldArgs?.value ? { ...fieldArgs.value } : ({} as AnyRecord);
-                  if (ownerRawId !== undefined) {
-                    value.id = ownerRawId;
-                  }
-                  return value;
-                })();
                 const metadata: ConnectionMetadata = {
-                  args: metadataArgs,
+                  args: fieldArgs?.value ? { ...fieldArgs.value } : undefined,
                   field: key,
                   hash: fieldArgs?.hash,
                   key: listKey,

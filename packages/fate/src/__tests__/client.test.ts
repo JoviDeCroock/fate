@@ -5137,7 +5137,7 @@ test(`'loadConnection' scopes args to the connection field`, async () => {
     'Post',
     ['post-1'],
     new Set(['comments.content', 'comments.id']),
-    { comments: { after: 'cursor-1', first: 2, id: 'post-1' } },
+    { comments: { after: 'cursor-1', first: 2 } },
   );
 });
 
@@ -6020,3 +6020,38 @@ test(`'linkParentLists' keeps unresolved inserts pending across scoped lists`, (
     pendingAfterIds: [newCommentId],
   });
 });
+
+test.each([undefined, 'filter-id'])(
+  'keeps the connection owner separate from nested pagination arguments (id: %s)',
+  async (id) => {
+    const fetchById = vi.fn(async () => []);
+    const client = createClient({
+      roots: {},
+      transport: { fetchById },
+      types: [{ fields: { comments: { listOf: 'Comment' } }, type: 'Post' }, { type: 'Comment' }],
+    });
+    const CommentView = view<Comment>()({ content: true, id: true });
+    const args = { first: 2, ...(id ? { id } : {}) };
+
+    const PostView = view<Post>()({ comments: { args, items: { node: CommentView } }, id: true });
+    const plan = getSelectionPlan(PostView, null);
+    client.write('Post', { comments: [], id: 'post-1' }, plan.paths, plan);
+    const snapshot = await client.readView<Post, SelectionOf<typeof PostView>, typeof PostView>(
+      PostView,
+      client.ref('Post', 'post-1', PostView),
+    );
+    const metadata = (snapshot.data.comments as unknown as { [ConnectionTag]: ConnectionMetadata })[
+      ConnectionTag
+    ];
+    expect(metadata.args).toEqual(args);
+
+    await client.loadConnection(CommentView, metadata, { after: 'cursor-1' });
+
+    expect(fetchById).toHaveBeenCalledExactlyOnceWith(
+      'Post',
+      ['post-1'],
+      new Set(['comments.content', 'comments.id']),
+      { comments: { ...args, after: 'cursor-1' } },
+    );
+  },
+);
