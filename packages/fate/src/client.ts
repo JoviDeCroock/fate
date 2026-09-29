@@ -183,10 +183,11 @@ const getDefaultHydrationScope = (
       .map(([name, root]) => [name, root.type])
       .sort(([left], [right]) => compareStrings(left, right)),
     types: types
-      .map(({ fields, type }) => ({
+      .map(({ fields, possibleTypes, type }) => ({
         fields: Object.entries(fields ?? {})
           .map(([field, descriptor]) => [field, descriptor] as const)
           .sort(([left], [right]) => compareStrings(left, right)),
+        possibleTypes,
         type,
       }))
       .sort((left, right) => compareStrings(left.type, right.type)),
@@ -464,6 +465,23 @@ export class FateClient<
     } finally {
       this.applyingGeneration = previous;
     }
+  }
+
+  private relatedEntityType(
+    declaredType: string,
+    possibleTypes: ReadonlyArray<string> | undefined,
+    record: AnyRecord,
+  ): string {
+    if (!possibleTypes) {
+      return declaredType;
+    }
+    const actualType = record.__typename;
+    if (typeof actualType !== 'string' || !possibleTypes.includes(actualType)) {
+      throw new Error(
+        `fate: Expected '${declaredType}' relation to contain one of ${possibleTypes.join(', ')}, received '${String(actualType)}'.`,
+      );
+    }
+    return actualType;
   }
 
   private readonly requestListeners = new Set<() => void>();
@@ -3243,6 +3261,7 @@ export class FateClient<
     insert?: InsertPosition,
   ): EntityId {
     return this.store.update(() => {
+      type = this.relatedEntityType(type, this.types.get(type)?.possibleTypes, record);
       const config = this.types.get(type);
       if (!config) {
         throw new Error(`fate: Found unknown entity type '${type}' in normalization.`);
@@ -3294,7 +3313,11 @@ export class FateClient<
               continue;
             }
             if (value && typeof value === 'object' && !isNodeRef(value)) {
-              const childType = relationDescriptor.type;
+              const childType = this.relatedEntityType(
+                relationDescriptor.type,
+                relationDescriptor.possibleTypes,
+                value as AnyRecord,
+              );
               const childConfig = this.types.get(childType);
               if (!childConfig) {
                 throw new Error(
@@ -3321,8 +3344,7 @@ export class FateClient<
               continue;
             }
             const childType = relationDescriptor.listOf;
-            const childConfig = this.types.get(childType);
-            if (!childConfig) {
+            if (!this.types.has(childType)) {
               throw new Error(
                 `fate: Unknown related type '${childType}' (field '${type}.${key}').`,
               );
@@ -3394,9 +3416,20 @@ export class FateClient<
                 }
 
                 if (node && typeof node === 'object') {
-                  const childId = toEntityId(childType, childConfig.getId(node as AnyRecord));
+                  const concreteType = this.relatedEntityType(
+                    childType,
+                    relationDescriptor.possibleTypes,
+                    node as AnyRecord,
+                  );
+                  const childConfig = this.types.get(concreteType);
+                  if (!childConfig) {
+                    throw new Error(
+                      `fate: Unknown related type '${concreteType}' (field '${type}.${key}').`,
+                    );
+                  }
+                  const childId = toEntityId(concreteType, childConfig.getId(node as AnyRecord));
 
-                  this.writeEntity(childType, node as AnyRecord, nodeSelection, plan, fieldPath);
+                  this.writeEntity(concreteType, node as AnyRecord, nodeSelection, plan, fieldPath);
 
                   ids.push(childId);
                   continue;

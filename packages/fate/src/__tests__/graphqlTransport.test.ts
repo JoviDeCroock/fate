@@ -2,6 +2,7 @@ import { buildSchema, graphql, parse, validate } from 'graphql';
 import { beforeEach, expect, test, vi } from 'vite-plus/test';
 import { createClient } from '../client.ts';
 import { createGraphQLArgumentSchema } from '../codegen/graphql.ts';
+import { graphQLOutputRelations } from '../graphqlSchema.ts';
 import { createGraphQLTransport } from '../graphqlTransport.ts';
 import { mutation, valueMutation } from '../mutation.ts';
 import { clientRoot, clientValueRoot } from '../root.ts';
@@ -285,6 +286,70 @@ test('selects ordinary entity arrays without a Relay connection wrapper', async 
   expect(validate(schema, parse(query))).toEqual([]);
   expect(query).toContain('messages { __typename id text }');
   expect(query).not.toContain('messages { edges');
+});
+
+test('normalizes interface relations and arrays under their concrete GraphQL type', async () => {
+  const schema = buildSchema(`
+    interface Node { id: ID!, name: String! }
+    type User implements Node { id: ID!, name: String!, friend: Node, friends: [Node!]! }
+    type Query { node: Node, viewer: User }
+  `);
+  const metadata = createGraphQLArgumentSchema(schema);
+  const types = graphQLOutputRelations(metadata);
+  const fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+    const { query, variables } = JSON.parse(String(init?.body));
+    return jsonResponse(
+      await graphql({
+        rootValue: {
+          node: () => ({ __typename: 'User', id: '2', name: 'Bob' }),
+          viewer: () => ({
+            friend: { __typename: 'User', id: '2', name: 'Bob' },
+            friends: [{ __typename: 'User', id: '2', name: 'Bob' }],
+            id: '1',
+            name: 'Alice',
+          }),
+        },
+        schema,
+        source: query,
+        variableValues: variables,
+      }),
+    );
+  });
+  const client = createClient({
+    roots: { node: clientRoot('Node'), viewer: clientRoot('User') },
+    transport: createGraphQLTransport({
+      fetch,
+      live: false,
+      roots: { node: { type: 'Node' }, viewer: { type: 'User' } },
+      schema: metadata,
+      types,
+      url: '/graphql',
+    }),
+    types,
+  });
+  const UserView = view<{
+    __typename: 'User';
+    friend: { __typename: 'User'; id: string; name: string };
+    friends: Array<{ __typename: 'User'; id: string; name: string }>;
+    id: string;
+    name: string;
+  }>()({ friend: { id: true, name: true }, friends: { id: true, name: true }, id: true });
+  await client.request({ viewer: { view: UserView } });
+  const result = await client.readView(UserView, client.ref('User', '1', UserView));
+  expect(result.data).toMatchObject({ friend: { name: 'Bob' }, friends: [{ name: 'Bob' }] });
+  expect(client.store.read('User:2')).toMatchObject({ name: 'Bob' });
+  expect(client.store.read('Node:2')).toBeUndefined();
+  expect(validate(schema, parse(getRequestBody(fetch).query))).toEqual([]);
+  await client.request({
+    node: {
+      view: view<{
+        __typename: 'User';
+        id: string;
+        name: string;
+      }>()({ id: true, name: true }),
+    },
+  });
+  expect(client.store.read('Node:2')).toBeUndefined();
 });
 
 test('selects arrays of embedded objects without identity or connection fields', async () => {

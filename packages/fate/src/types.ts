@@ -118,16 +118,17 @@ export type RelationDescriptor =
   /** Field stores a scalar value that does not link to another type. */
   | 'scalar'
   /** Field points to a single entity of the given type. */
-  | { type: string }
+  | { possibleTypes?: ReadonlyArray<string>; type: string }
   /** Field contains an object without entity identity. */
   | { embedded: string }
   /** Field holds a list of entities of the given type. */
-  | { array?: boolean; listOf: string };
+  | { array?: boolean; listOf: string; possibleTypes?: ReadonlyArray<string> };
 
 /** Configuration for a server entity type used by the client cache. */
 export type TypeConfig = {
   fields?: Record<string, RelationDescriptor>;
   getId: (record: unknown) => string | number;
+  possibleTypes?: ReadonlyArray<string>;
   type: string;
 };
 

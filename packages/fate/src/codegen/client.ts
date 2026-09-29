@@ -20,15 +20,22 @@ const formatRelation = (value: {
   array?: boolean;
   embedded?: string;
   listOf?: string;
+  possibleTypes?: ReadonlyArray<string>;
   type?: string;
 }) =>
   'listOf' in value
-    ? `{ listOf: '${value.listOf}'${value.array ? ', array: true' : ''} }`
+    ? `{ listOf: '${value.listOf}'${value.array ? ', array: true' : ''}${value.possibleTypes ? `, possibleTypes: ${JSON.stringify(value.possibleTypes)}` : ''} }`
     : 'embedded' in value
       ? `{ embedded: '${value.embedded}' }`
-      : `{ type: '${value.type}' }`;
+      : `{ type: '${value.type}'${value.possibleTypes ? `, possibleTypes: ${JSON.stringify(value.possibleTypes)}` : ''} }`;
 
-const formatTypes = (types: ReadonlyArray<{ fields?: Record<string, any>; type: string }>) => {
+const formatTypes = (
+  types: ReadonlyArray<{
+    fields?: Record<string, any>;
+    possibleTypes?: ReadonlyArray<string>;
+    type: string;
+  }>,
+) => {
   if (!types.length) {
     return '[]';
   }
@@ -42,6 +49,9 @@ const formatTypes = (types: ReadonlyArray<{ fields?: Record<string, any>; type: 
         lines.push(`      ${field}: ${formatRelation(relation)},`);
       }
       lines.push('    },');
+    }
+    if (typeConfig.possibleTypes) {
+      lines.push(`    possibleTypes: ${JSON.stringify(typeConfig.possibleTypes)},`);
     }
     lines.push(`    type: '${typeConfig.type}',`, '  },');
   }
@@ -453,13 +463,21 @@ const createGraphQLClientSource = ({
         ...inferredByType.get(entry.type)?.fields,
         ...explicitByType.get(entry.type)?.fields,
       },
+      possibleTypes: inferredByType.get(entry.type)?.possibleTypes,
     })),
     ...(graphQLConfig.types ?? [])
       .filter((entry) => !types.some((type) => type.type === entry.type))
       .map((entry) => ({
         ...entry,
         fields: { ...inferredByType.get(entry.type)?.fields, ...entry.fields },
+        possibleTypes: inferredByType.get(entry.type)?.possibleTypes,
       })),
+    ...inferredTypes.filter(
+      (entry) =>
+        argumentSchema?.outputs?.[entry.type]?.id &&
+        !types.some((type) => type.type === entry.type) &&
+        !(graphQLConfig.types ?? []).some((type) => type.type === entry.type),
+    ),
   ];
   const selectionTypes = [
     ...transportTypes,

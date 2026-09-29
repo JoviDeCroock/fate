@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import type { GraphQLSchema } from 'graphql';
+import type { GraphQLInterfaceType, GraphQLSchema } from 'graphql';
 import type { GraphQLArgumentSchema, GraphQLArguments } from '../graphqlSchema.ts';
 
 const require = createRequire(import.meta.url);
@@ -44,6 +44,7 @@ export function createGraphQLArgumentSchema(source: string | GraphQLSchema): Gra
   }
   const fields: Record<string, Record<string, GraphQLArguments>> = {};
   const outputs: Record<string, Record<string, string>> = {};
+  const possibleTypes: Record<string, Array<string>> = {};
   const inputs: Record<string, GraphQLArgumentSchema['inputs'][string]> = {};
   for (const [name, type] of Object.entries(schema.getTypeMap()).sort(([a], [b]) =>
     a.localeCompare(b),
@@ -52,6 +53,11 @@ export function createGraphQLArgumentSchema(source: string | GraphQLSchema): Gra
       continue;
     }
     if ('getFields' in type && 'getInterfaces' in type) {
+      if (type.constructor.name === 'GraphQLInterfaceType') {
+        possibleTypes[name] = schema
+          .getPossibleTypes(type as GraphQLInterfaceType)
+          .map((possible) => possible.name);
+      }
       outputs[name] = Object.fromEntries(
         Object.entries(type.getFields()).map(([fieldName, field]) => [
           fieldName,
@@ -80,6 +86,7 @@ export function createGraphQLArgumentSchema(source: string | GraphQLSchema): Gra
     inputs,
     mutationType: schema.getMutationType()?.name,
     outputs,
+    possibleTypes,
     queryType,
     subscriptionType: schema.getSubscriptionType()?.name,
   };

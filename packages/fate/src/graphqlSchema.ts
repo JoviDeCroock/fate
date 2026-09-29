@@ -55,6 +55,7 @@ export type GraphQLArgumentSchema = Readonly<{
   >;
   mutationType?: string;
   outputs?: Readonly<Record<string, Readonly<Record<string, string>>>>;
+  possibleTypes?: Readonly<Record<string, ReadonlyArray<string>>>;
   queryType: string;
   subscriptionType?: string;
 }>;
@@ -64,7 +65,11 @@ const baseGraphQLType = (type: string) => type.replaceAll(/[![\]]/g, '');
 
 export const graphQLOutputRelations = (
   schema: GraphQLArgumentSchema | undefined,
-): Array<{ fields: Record<string, RelationDescriptor>; type: string }> => {
+): Array<{
+  fields: Record<string, RelationDescriptor>;
+  possibleTypes?: ReadonlyArray<string>;
+  type: string;
+}> => {
   const outputs = schema?.outputs ?? {};
   return Object.entries(outputs).map(([type, outputFields]) => {
     const fields: Record<string, RelationDescriptor> = {};
@@ -82,13 +87,17 @@ export const graphQLOutputRelations = (
         }
       }
       const array = outputType.replaceAll('!', '').startsWith('[');
+      const possibleTypes = schema?.possibleTypes?.[childType];
       if (outputs[childType].id) {
-        fields[field] = array ? { array: true, listOf: childType } : { type: childType };
+        fields[field] = array
+          ? { array: true, listOf: childType, ...(possibleTypes ? { possibleTypes } : {}) }
+          : { type: childType, ...(possibleTypes ? { possibleTypes } : {}) };
       } else {
         fields[field] = array ? { array: true, embedded: childType } : { embedded: childType };
       }
     }
-    return { fields, type };
+    const possibleTypes = schema?.possibleTypes?.[type];
+    return { fields, ...(possibleTypes ? { possibleTypes } : {}), type };
   });
 };
 

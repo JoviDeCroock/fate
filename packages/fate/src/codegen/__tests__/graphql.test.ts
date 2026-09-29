@@ -49,6 +49,26 @@ test('extracts input defaults and custom root names from SDL and schema objects'
   expect(metadata.fields.Read.map.filter.type).toBe('Filter!');
 });
 
+test('generates concrete identity metadata for GraphQL interface relations', () => {
+  const source = createClientSource({
+    moduleExports: {
+      ...moduleExports,
+      fateGraphQL: {
+        ...moduleExports.fateGraphQL,
+        schema: schema.replace(
+          'type Map {',
+          'interface Node { id: ID! } type Map implements Node { related: Node,',
+        ),
+      },
+    },
+    moduleName: './contract.ts',
+    transport: 'graphql',
+  });
+  expect(source).toContain('related: { type: \'Node\', possibleTypes: ["Map"] }');
+  expect(source).toContain('possibleTypes: ["Map"]');
+  expect(source).toContain("type: 'Node'");
+});
+
 test('explains undeclared SDL directives without relaxing schema validation', () => {
   const annotatedSDL = `
     type Query @fetchable(field_name: "id") {
