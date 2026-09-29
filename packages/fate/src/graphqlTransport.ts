@@ -515,7 +515,7 @@ const relayToFateConnection = (value: unknown) => {
 
   return {
     items: edges.flatMap((edge) =>
-      isRecord(edge)
+      isRecord(edge) && edge.node != null
         ? [
             {
               cursor: typeof edge.cursor === 'string' ? edge.cursor : undefined,

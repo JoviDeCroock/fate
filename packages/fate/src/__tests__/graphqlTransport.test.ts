@@ -385,6 +385,44 @@ test('treats null Relay edges as an empty window with page information', async (
   });
 });
 
+test('skips nullable Relay edge nodes while preserving valid cursors and pagination', async () => {
+  const fetch = vi.fn(async () =>
+    jsonResponse({
+      data: {
+        f1: {
+          edges: [
+            { cursor: 'missing', node: null },
+            { cursor: 'valid', node: { __typename: 'Post', id: 'Post-1', title: 'Hello' } },
+          ],
+          pageInfo: {
+            endCursor: 'valid',
+            hasNextPage: false,
+            hasPreviousPage: false,
+            startCursor: 'missing',
+          },
+        },
+      },
+    }),
+  );
+  const transport = createGraphQLTransport({
+    fetch,
+    live: false,
+    roots: { posts: { connection: 'relay', type: 'Post' } },
+    types: [{ type: 'Post' }],
+    url: '/graphql',
+  });
+
+  await expect(transport.fetchList?.('posts', new Set(['id', 'title']))).resolves.toEqual({
+    items: [{ cursor: 'valid', node: { __typename: 'Post', id: '1', title: 'Hello' } }],
+    pagination: {
+      hasNext: false,
+      hasPrevious: false,
+      nextCursor: 'valid',
+      previousCursor: 'missing',
+    },
+  });
+});
+
 test('fetches nodes through the Relay nodes field and decodes global ids', async () => {
   const fetch = vi.fn(async () =>
     jsonResponse({
