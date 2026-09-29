@@ -286,6 +286,45 @@ test('selects ordinary entity arrays without a Relay connection wrapper', async 
   expect(query).not.toContain('messages { edges');
 });
 
+test('selects arrays of embedded objects without identity or connection fields', async () => {
+  const schema = buildSchema(
+    `type Query { rogueState: RogueState } type RogueState { ownedRelics: [Relic!]! } type Relic { name: String! bonus: Bonus } type Bonus { power: Int! }`,
+  );
+  const fetch = vi.fn(async () =>
+    jsonResponse({
+      data: {
+        f1: {
+          ownedRelics: [
+            { bonus: { power: 3 }, name: 'Ember' },
+            { bonus: null, name: 'Ash' },
+          ],
+        },
+      },
+    }),
+  );
+  const transport = createGraphQLTransport({
+    fetch,
+    live: false,
+    roots: { rogueState: { embedded: true, type: 'RogueState' } },
+    schema: createGraphQLArgumentSchema(schema),
+    types: [],
+    url: '/graphql',
+  });
+
+  await expect(
+    transport.fetchQuery?.('rogueState', new Set(['ownedRelics.name', 'ownedRelics.bonus.power'])),
+  ).resolves.toEqual({
+    ownedRelics: [
+      { bonus: { power: 3 }, name: 'Ember' },
+      { bonus: null, name: 'Ash' },
+    ],
+  });
+  const query = getRequestBody(fetch).query;
+  expect(validate(schema, parse(query))).toEqual([]);
+  expect(query).toContain('ownedRelics { bonus { power } name }');
+  expect(query).not.toContain('ownedRelics { edges');
+});
+
 test('fetches nodes through the Relay nodes field and decodes global ids', async () => {
   const fetch = vi.fn(async () =>
     jsonResponse({

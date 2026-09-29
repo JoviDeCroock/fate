@@ -91,6 +91,35 @@ test('generates ID-less object mutation selections', () => {
   expect(source).toContain("type: 'Checkout'");
 });
 
+test('uses schema object shapes for generated nested cache relations', () => {
+  type CharacterImage = { color: string };
+  type Message = { __typename: 'Message'; id: string; text: string };
+  type User = { __typename: 'User'; character: CharacterImage; id: string };
+  type Game = { __typename: 'Game'; id: string; messages: Array<Message> };
+  const character = dataView<CharacterImage>('CharacterImage')({ color: true });
+  const message = dataView<Message>('Message')({ id: true, text: true });
+  const user = dataView<User>('User')({ character, id: true });
+  const game = dataView<Game>('Game')({ id: true, messages: list(message) });
+  const source = createClientSource({
+    moduleExports: {
+      character,
+      fateGraphQL: {
+        schema:
+          'type Query { viewer: User game: Game } type User { id: ID! character: CharacterImage } type CharacterImage { color: String! } type Game { id: ID! messages: [Message!]! } type Message { id: ID! text: String! }',
+      },
+      game,
+      message,
+      Root: { game, viewer: user },
+      user,
+    },
+    moduleName: '@org/app',
+    transport: 'graphql',
+  });
+
+  expect(source).toContain("character: { embedded: 'CharacterImage' }");
+  expect(source).toContain("messages: { listOf: 'Message', array: true }");
+});
+
 test('generates the same client source for the Prisma and Drizzle examples', async () => {
   setExampleEnv();
 

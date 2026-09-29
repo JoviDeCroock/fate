@@ -1,4 +1,8 @@
-import { validateGraphQLArguments, type GraphQLArgumentSchema } from './graphqlSchema.ts';
+import {
+  graphQLOutputRelations,
+  validateGraphQLArguments,
+  type GraphQLArgumentSchema,
+} from './graphqlSchema.ts';
 import { isRecord } from './record.ts';
 import type { Transport } from './transport.ts';
 import type { AnyRecord, Entity, MutationShape, Pagination, TypeConfig } from './types.ts';
@@ -680,7 +684,20 @@ export function createGraphQLTransport<
   url,
 }: GraphQLTransportOptions<Mutations>): Transport<Mutations> {
   const endpoint = normalizeEndpoint(url);
-  const types = new Map(typeConfigs.map((type) => [type.type, type as TypeConfig]));
+  const types = new Map<string, TypeConfig>(
+    graphQLOutputRelations(schema).map((type) => [
+      type.type,
+      { ...type, getId: (record: unknown) => (record as { id: string }).id },
+    ]),
+  );
+  for (const config of typeConfigs) {
+    const inferred = types.get(config.type);
+    types.set(config.type, {
+      ...inferred,
+      ...config,
+      fields: { ...inferred?.fields, ...config.fields },
+    } as TypeConfig);
+  }
   let nextId = 0;
   let nextVariableId = 0;
   const operationArguments = () => {

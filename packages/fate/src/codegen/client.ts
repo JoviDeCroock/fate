@@ -1,4 +1,5 @@
 import type { GraphQLSchema } from 'graphql';
+import { graphQLOutputRelations } from '../graphqlSchema.ts';
 import { sortObjectKeys } from '../sortObjectKeys.ts';
 import type { FateViteTransport } from '../viteTypes.ts';
 import {
@@ -431,16 +432,32 @@ const createGraphQLClientSource = ({
     schema?: string | GraphQLSchema;
     types?: ReadonlyArray<{ fields?: Record<string, any>; type: string }>;
   };
-  const transportTypes = [
-    ...types,
-    ...(graphQLConfig.types ?? []).filter(
-      (entry) => !types.some((type) => type.type === entry.type),
-    ),
-  ];
-
   const argumentSchema = graphQLConfig.schema
     ? createGraphQLArgumentSchema(graphQLConfig.schema)
     : undefined;
+  const inferredTypes = graphQLOutputRelations(argumentSchema);
+  const inferredByType = new Map(inferredTypes.map((entry) => [entry.type, entry]));
+  const explicitByType = new Map((graphQLConfig.types ?? []).map((entry) => [entry.type, entry]));
+  const transportTypes = [
+    ...types.map((entry) => ({
+      ...entry,
+      fields: {
+        ...entry.fields,
+        ...inferredByType.get(entry.type)?.fields,
+        ...explicitByType.get(entry.type)?.fields,
+      },
+    })),
+    ...(graphQLConfig.types ?? [])
+      .filter((entry) => !types.some((type) => type.type === entry.type))
+      .map((entry) => ({
+        ...entry,
+        fields: { ...inferredByType.get(entry.type)?.fields, ...entry.fields },
+      })),
+  ];
+  const selectionTypes = [
+    ...transportTypes,
+    ...inferredTypes.filter((entry) => !transportTypes.some((type) => type.type === entry.type)),
+  ];
   const mutationInputType = (name: string, field: string, inputArg?: false | string) => {
     if (!argumentSchema) {
       return `GraphQLMutationInput<typeof ${graphQLConfigExportName}.mutations['${name}']>`;
@@ -486,13 +503,19 @@ const createGraphQLClientSource = ({
   const selectionArguments = argumentSchema
     ? `
 export type GraphQLSelectionArguments = {
-${types
+${selectionTypes
   .map(
     ({ fields, type }) => `  ${JSON.stringify(type)}: {
 ${Object.entries(argumentSchema.fields[type] ?? {})
   .flatMap(([field, args]) => {
     const relation = fields?.[field];
-    const child = relation && ('type' in relation ? relation.type : relation.listOf);
+    const child =
+      relation &&
+      ('type' in relation
+        ? relation.type
+        : 'embedded' in relation
+          ? relation.embedded
+          : relation.listOf);
     if (!child && !Object.keys(args).length) {
       return [];
     }

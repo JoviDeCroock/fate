@@ -22,6 +22,7 @@ export function createGraphQLArgumentSchema(source: string | GraphQLSchema): Gra
     throw new Error('fate(graphql): The schema must have a query type.');
   }
   const fields: Record<string, Record<string, GraphQLArguments>> = {};
+  const outputs: Record<string, Record<string, string>> = {};
   const inputs: Record<string, GraphQLArgumentSchema['inputs'][string]> = {};
   for (const [name, type] of Object.entries(schema.getTypeMap()).sort(([a], [b]) =>
     a.localeCompare(b),
@@ -30,6 +31,12 @@ export function createGraphQLArgumentSchema(source: string | GraphQLSchema): Gra
       continue;
     }
     if ('getFields' in type && 'getInterfaces' in type) {
+      outputs[name] = Object.fromEntries(
+        Object.entries(type.getFields()).map(([fieldName, field]) => [
+          fieldName,
+          String(field.type),
+        ]),
+      );
       fields[name] = Object.fromEntries(
         Object.entries(type.getFields()).map(([name, field]) => [
           name,
@@ -51,6 +58,7 @@ export function createGraphQLArgumentSchema(source: string | GraphQLSchema): Gra
     fields,
     inputs,
     mutationType: schema.getMutationType()?.name,
+    outputs,
     queryType,
     subscriptionType: schema.getSubscriptionType()?.name,
   };

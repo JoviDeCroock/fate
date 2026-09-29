@@ -1,4 +1,5 @@
 import { isRecord } from './record.ts';
+import type { RelationDescriptor } from './types.ts';
 
 export type GraphQLArgument = Readonly<{ hasDefault?: boolean; type: string }>;
 export type GraphQLArguments = Readonly<Record<string, GraphQLArgument>>;
@@ -14,9 +15,43 @@ export type GraphQLArgumentSchema = Readonly<{
     >
   >;
   mutationType?: string;
+  outputs?: Readonly<Record<string, Readonly<Record<string, string>>>>;
   queryType: string;
   subscriptionType?: string;
 }>;
+
+/** Infer relation storage shapes from GraphQL output types. */
+const baseGraphQLType = (type: string) => type.replaceAll(/[![\]]/g, '');
+
+export const graphQLOutputRelations = (
+  schema: GraphQLArgumentSchema | undefined,
+): Array<{ fields: Record<string, RelationDescriptor>; type: string }> => {
+  const outputs = schema?.outputs ?? {};
+  return Object.entries(outputs).map(([type, outputFields]) => {
+    const fields: Record<string, RelationDescriptor> = {};
+    for (const [field, outputType] of Object.entries(outputFields)) {
+      const childType = baseGraphQLType(outputType);
+      if (!outputs[childType]) {
+        continue;
+      }
+      if (outputs[childType].edges && outputs[childType].pageInfo) {
+        const edgeType = baseGraphQLType(outputs[childType].edges);
+        const nodeType = outputs[edgeType]?.node;
+        if (nodeType) {
+          fields[field] = { listOf: baseGraphQLType(nodeType) };
+          continue;
+        }
+      }
+      const array = outputType.replaceAll('!', '').startsWith('[');
+      if (outputs[childType].id) {
+        fields[field] = array ? { array: true, listOf: childType } : { type: childType };
+      } else {
+        fields[field] = array ? { array: true, embedded: childType } : { embedded: childType };
+      }
+    }
+    return { fields, type };
+  });
+};
 
 const invalidInput = (path: string, type: string): never => {
   throw new Error(`fate(graphql): Invalid input '${path}'; expected ${type}.`);
