@@ -60,6 +60,11 @@ import {
   type ValueRequestDescriptor,
   type RequestDescriptor,
 } from './request-descriptor.ts';
+import {
+  createRequestObserver,
+  type RequestObserver,
+  type RequestStateOptions,
+} from './request-observer.ts';
 import FateRequestPromise from './request-promise.ts';
 import { getDeferredSelectionPlan, getSelectionPlan, type SelectionPlan } from './selection.ts';
 import { getListKey, List, mergePreservingExisting, Store } from './store.ts';
@@ -431,6 +436,10 @@ export class FateClient<
   Mutations extends FateMutations,
   HydrationScope extends string = string,
 > {
+  private readonly requestListeners = new Set<() => void>();
+  private requestNotificationScheduled = false;
+  private readonly cacheOnlyRefs = new WeakSet<object>();
+  private readonly cacheOnlyCopies = new WeakMap<object, object>();
   private readonly mutationEntities?: ReadonlyMap<string, string>;
   private readonly mutationMap: Record<string, MutationFunction<any>>;
   private readonly parentLists = new Map<
@@ -471,8 +480,12 @@ export class FateClient<
         this.viewDataCache.invalidate(id);
       }
       this.runPendingGarbageCollection();
+      this.notifyRequests();
     },
-    (change) => this.persistenceRuntime?.changed(change),
+    (change) => {
+      this.persistenceRuntime?.changed(change);
+      this.notifyRequests();
+    },
   );
   private readonly operationLifetime: OperationLifetime;
   private readonly hydrationLimits: HydrationLimits;
@@ -1084,6 +1097,9 @@ export class FateClient<
 
     const resolveSnapshot = () => {
       const resolvedView = this.readViewSelection<T, S>(view, ref, entityId, plan);
+      if (this.cacheOnlyRefs.has(ref)) {
+        this.markCacheOnly(resolvedView.data);
+      }
 
       const thenable = {
         status: 'fulfilled',
@@ -1111,6 +1127,9 @@ export class FateClient<
     }
 
     if (missing.size > 0) {
+      if (this.cacheOnlyRefs.has(ref)) {
+        throw new Error('fate: Cache-only view is missing selected fields.');
+      }
       const key = this.pendingKey(
         entityId,
         new Set([...missing].map((path) => getStoragePath(path, plan))),
@@ -2108,6 +2127,87 @@ export class FateClient<
     return this.store.getListState(connection.key);
   }
 
+  private notifyRequests() {
+    if (this.requestNotificationScheduled) {
+      return;
+    }
+    this.requestNotificationScheduled = true;
+    queueMicrotask(() => {
+      this.requestNotificationScheduled = false;
+      for (const listener of this.requestListeners) {
+        listener();
+      }
+    });
+  }
+
+  private markCacheOnly(value: unknown): void {
+    if (!value || typeof value !== 'object' || this.cacheOnlyRefs.has(value)) {
+      return;
+    }
+    this.cacheOnlyRefs.add(value);
+    for (const child of Object.values(value)) {
+      this.markCacheOnly(child);
+    }
+  }
+
+  private cacheOnlyResult<T>(value: T): T {
+    if (!value || typeof value !== 'object') {
+      return value;
+    }
+    if (ViewsTag in value) {
+      let copy = this.cacheOnlyCopies.get(value);
+      if (!copy) {
+        copy = Object.create(Object.getPrototypeOf(value), Object.getOwnPropertyDescriptors(value));
+        this.cacheOnlyCopies.set(value, copy!);
+        this.cacheOnlyRefs.add(copy!);
+      }
+      return copy as T;
+    }
+    if (Array.isArray(value)) {
+      return value.map((child) => this.cacheOnlyResult(child)) as T;
+    }
+    if (Object.getPrototypeOf(value) !== Object.prototype) {
+      return value;
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    for (const descriptor of Object.values(descriptors)) {
+      if ('value' in descriptor) {
+        descriptor.value = this.cacheOnlyResult(descriptor.value);
+      }
+    }
+    return Object.create(Object.prototype, descriptors);
+  }
+
+  /** Observes complete request results without throwing or suspending on a cache miss. */
+  observeRequest<R extends Request>(
+    request: R,
+    options: RequestStateOptions = {},
+  ): RequestObserver<RequestResult<Roots, R>> {
+    const descriptor = this.createRequestDescriptor(request);
+    return createRequestObserver({
+      options,
+      read: () => {
+        if (!this.hasRequestData(descriptor)) {
+          return undefined;
+        }
+        const data = this.getRequestResultFromDescriptor(descriptor) as RequestResult<Roots, R>;
+        return options.mode === 'cache-only' ? this.cacheOnlyResult(data) : data;
+      },
+      retain: () => this.retain(request),
+      start: () =>
+        this.requestForRender(request, {
+          ...options,
+          mode: options.mode === 'cache-only' ? 'cache-first' : options.mode,
+        }),
+      subscribe: (listener) => {
+        this.requestListeners.add(listener);
+        return () => {
+          this.requestListeners.delete(listener);
+        };
+      },
+    });
+  }
+
   request<const R extends Request>(
     request: CheckedRequest<Roots, R>,
     options?: RequestOptions,
@@ -2444,6 +2544,10 @@ export class FateClient<
           )
         : execute(),
     );
+    void handle.then(
+      () => this.notifyRequests(),
+      () => this.notifyRequests(),
+    );
   }
 
   private markRecordReferences(record: AnyRecord, markRecord: (entityId: EntityId) => void) {
@@ -2549,9 +2653,10 @@ export class FateClient<
     }
 
     const result = this.getRequestResultFromDescriptor(request) as RequestResult<Roots, R>;
-    this.executeRequest(request, options).catch(() => {
-      /* empty */
-    });
+    void this.executeRequest(request, options).then(
+      () => this.notifyRequests(),
+      () => this.notifyRequests(),
+    );
     return result;
   }
 

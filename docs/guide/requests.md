@@ -180,3 +180,25 @@ fate.hydrate(loaderData.fate, { merge: 'replace' });
 `preserve-existing` recursively combines plain scalar objects while keeping browser values on conflicts. Arrays, dates, entity references, and list windows are atomic: an existing browser value wins as a whole. Replaying a snapshot is safe and does not notify subscribers when durable cache state is unchanged.
 
 Do not reuse request-scoped snapshots across users. Dehydrate after awaited route preloading: snapshots are point-in-time values and do not stream cache patches for data that resolves later. Hydration and dehydration reject clients with in-flight requests, so hydrate the initial snapshot before rendering.
+
+## Observing Request State
+
+React's `useRequestState(request, options)` observes a request without suspending.
+It returns `status`, `data`, `error`, and `isFetching`. Status is `pending`, `ready`,
+or `error` for an enabled network request. An initial failure exposes the original
+error rather than throwing during render. Request data contains the same refs as
+`useRequest`; resolve them with `useView`.
+
+Use `{ enabled: false }` for an empty search or an inactive screen. The status is
+`disabled`, data is undefined, and no request starts. Changing `enabled` to true
+starts the request. Equivalent inline request objects do not cause repeat fetches.
+
+Use `{ mode: 'cache-only' }` to observe already-cached data. A complete selection
+has status `ready`; an incomplete selection has status `missing` and undefined
+data. A successful nullable root remains `ready` with a null value. Cache-only
+requests never fetch, and their view refs cannot fetch missing fields either.
+Mounted observers retain their request's records until unmount.
+
+Outside React, `client.observeRequest(request, options)` exposes `getSnapshot()`
+and `subscribe(listener)`. The first subscriber starts an enabled request;
+unsubscribing releases its retention. Reading a snapshot alone never starts work.

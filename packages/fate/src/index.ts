@@ -99,3 +99,5 @@ export type {
 export type { GraphQLArgumentSchema } from './graphqlSchema.ts';
 
 export { GraphQLRequestError, type GraphQLErrorPayload } from './graphql-error.ts';
+
+export type { RequestObserver, RequestState, RequestStateOptions } from './request-observer.ts';
