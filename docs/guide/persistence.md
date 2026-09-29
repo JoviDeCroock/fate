@@ -195,7 +195,7 @@ Native HTTP sends durable mutations and receipt-only recovery using protocol ver
 
 ## tRPC, GraphQL, and Custom Transports
 
-For tRPC, GraphQL, or a custom transport, provide a `mutateDurably(name, input, select, identity)` method that sends the identity to an endpoint with server deduplication. Regular calls continue to use `mutate(name, input, select)`.
+For tRPC, GraphQL, or a custom transport, provide a `mutateDurably(name, input, select, identity)` method that sends the identity to an endpoint with server deduplication. Regular calls continue to use `mutate(name, input, select)`. GraphQL passes selected field arguments as an optional fifth parameter to `mutateDurably` (fourth for `mutate`), separate from the mutation input. Forward that parameter if the durable response selects fields with arguments.
 
 Both `createTRPCTransport` and `createGraphQLTransport`, including their generated clients, accept `mutateDurably`. For example, you can use a native fate endpoint for durable mutations alongside your existing transport:
 

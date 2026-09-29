@@ -1005,7 +1005,7 @@ export function createGraphQLTransport<
         variables,
       });
     },
-    mutate(name, input, select) {
+    mutate(name, input, select, selectionArgs) {
       const mutation = mutations?.[name as Extract<keyof Mutations, string>];
       if (!mutation) {
         throw new Error(`fate(graphql): Missing mutation mapping for '${name}'.`);
@@ -1013,17 +1013,15 @@ export function createGraphQLTransport<
 
       const { argumentsForField, variables } = operationArguments();
       const field = assertIdentifier(mutation.field, 'mutation');
-      const { args: selectionArgs, ...wireInput } = isRecord(input) ? input : { args: undefined };
-      const mutationInput = isRecord(input) ? wireInput : input;
       const args =
         mutation.inputArg === false
-          ? ((mutationInput ?? {}) as Record<string, unknown>)
-          : { [mutation.inputArg ?? 'input']: mutationInput };
+          ? ((input ?? {}) as Record<string, unknown>)
+          : { [mutation.inputArg ?? 'input']: input };
       const selection =
         mutation.entity === '__value__' && !mutation.type
           ? ''
           : buildRecordSelection({
-              args: isRecord(selectionArgs) ? selectionArgs : undefined,
+              args: selectionArgs,
               argumentsForField,
               embedded: mutation.entity === '__value__',
               path: '',
@@ -1047,6 +1045,7 @@ export function createGraphQLTransport<
       }) as Promise<Mutations[Extract<keyof Mutations, string>]['output']>;
     },
     mutateDurably,
+    separateMutationSelectionArgs: true,
     supportsAliases: true,
   };
 

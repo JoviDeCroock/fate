@@ -999,8 +999,9 @@ export class FateClient<
     }
 
     const baseRecord = input && typeof input === 'object' ? (input as AnyRecord) : undefined;
+    const separateSelectionArgs = this.transport.separateMutationSelectionArgs;
     const inputArgs =
-      baseRecord && typeof baseRecord.args === 'object'
+      !separateSelectionArgs && baseRecord && typeof baseRecord.args === 'object'
         ? (baseRecord.args as AnyRecord)
         : undefined;
     const argsPayload = combineArgsPayload(
@@ -1008,8 +1009,9 @@ export class FateClient<
       combineArgsPayload(inputArgs, options.args),
     );
 
-    const requestInput =
-      argsPayload && baseRecord
+    const requestInput = separateSelectionArgs
+      ? input
+      : argsPayload && baseRecord
         ? ({ ...baseRecord, args: argsPayload } as AnyRecord)
         : argsPayload
           ? ({ args: argsPayload } as AnyRecord)
@@ -1017,8 +1019,18 @@ export class FateClient<
 
     return await this.trackPendingRequest(() =>
       options.identity
-        ? this.transport.mutateDurably!(key as any, requestInput as any, select, options.identity)
-        : this.transport.mutate!(key as any, requestInput as any, select),
+        ? separateSelectionArgs
+          ? this.transport.mutateDurably!(
+              key as any,
+              requestInput as any,
+              select,
+              options.identity,
+              argsPayload,
+            )
+          : this.transport.mutateDurably!(key as any, requestInput as any, select, options.identity)
+        : separateSelectionArgs
+          ? this.transport.mutate!(key as any, requestInput as any, select, argsPayload)
+          : this.transport.mutate!(key as any, requestInput as any, select),
     );
   }
 

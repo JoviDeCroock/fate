@@ -3,7 +3,7 @@ import { beforeEach, expect, test, vi } from 'vite-plus/test';
 import { createClient } from '../client.ts';
 import { createGraphQLArgumentSchema } from '../codegen/graphql.ts';
 import { createGraphQLTransport } from '../graphqlTransport.ts';
-import { valueMutation } from '../mutation.ts';
+import { mutation, valueMutation } from '../mutation.ts';
 import { clientRoot, clientValueRoot } from '../root.ts';
 import { view } from '../view.ts';
 
@@ -852,15 +852,13 @@ test('batches independent variables and preserves input defaults and explicit nu
   });
 });
 
-test('keeps query and mutation variables separate and strips mutation selection metadata', async () => {
+test('keeps query and mutation variables separate from selection arguments', async () => {
   const { fetch, transport, update } = createArgumentTransport();
   const results = await Promise.all([
     transport.fetchQuery?.('map', new Set(['name']), { biome: 'Desert' }),
-    transport.mutate?.(
-      'update',
-      { args: { state: { biome: 'Desert' } }, biome: 'Grassland' },
-      new Set(['name', 'state']),
-    ),
+    transport.mutate?.('update', { biome: 'Grassland' }, new Set(['name', 'state']), {
+      state: { biome: 'Desert' },
+    }),
     transport.mutate?.('edit', { biome: 'Desert' }, new Set(['name'])),
   ]);
   expect(results).toMatchObject([
@@ -873,6 +871,58 @@ test('keeps query and mutation variables separate and strips mutation selection 
   const bodies = fetch.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
   expect(Object.keys(bodies[0].variables)).toHaveLength(1);
   expect(Object.keys(bodies[1].variables)).toHaveLength(3);
+});
+
+test('preserves a real mutation argument named args alongside selection arguments', async () => {
+  type MapRecord = { __typename: 'Map'; id: string; state: string };
+  const schema = buildSchema(`
+    enum Biome { Desert Grassland }
+    input SetArgs { text: String! }
+    type Query { available: Boolean }
+    type Map { id: ID!, state(biome: Biome!): String! }
+    type Mutation { set(args: SetArgs!): Map! }
+  `);
+  const set = vi.fn(({ args }: { args: { text: string } }) => ({
+    id: 'Map-1',
+    state: ({ biome }: { biome: string }) => `${args.text}:${biome}`,
+  }));
+  const fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+    const { query, variables } = JSON.parse(String(init?.body));
+    return jsonResponse(
+      await graphql({ rootValue: { set }, schema, source: query, variableValues: variables }),
+    );
+  });
+  const transport = createGraphQLTransport<{
+    set: { input: { args: { text: string } }; output: MapRecord };
+  }>({
+    fetch,
+    live: false,
+    mutations: { set: { entity: 'Map', field: 'set', inputArg: false } },
+    schema: createGraphQLArgumentSchema(schema),
+    types: [{ type: 'Map' }],
+    url: '/graphql',
+  });
+  const mutations = { set: mutation<MapRecord, { args: { text: string } }, MapRecord>('Map') };
+  const roots = {};
+  const client = createClient<[typeof roots, typeof mutations]>({
+    mutations,
+    roots,
+    transport,
+    types: [{ type: 'Map' }],
+  });
+  const MapView = view<MapRecord>()({ id: true, state: { args: { biome: 'Desert' } } });
+
+  await expect(
+    client.mutations.set({ input: { args: { text: 'hello' } }, view: MapView }),
+  ).resolves.toMatchObject({
+    error: undefined,
+    result: { id: '1', state: 'hello:Desert' },
+  });
+  expect(set.mock.calls[0]?.[0]).toEqual({ args: { text: 'hello' } });
+  const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body));
+  expect(body.query).toMatch(/set\(args: \$\w+\)/);
+  expect(body.query).toMatch(/state\(biome: \$\w+\)/);
+  expect(Object.values(body.variables)).toEqual(['Desert', { text: 'hello' }]);
 });
 
 test.each([

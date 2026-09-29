@@ -70,6 +70,7 @@ export interface Transport<Mutations extends TransportMutations = EmptyTransport
     proc: K,
     input: Mutations[K]['input'],
     select: Set<string>,
+    selectionArgs?: ResolvedArgsPayload,
   ): Promise<Mutations[K]['output']>;
   /**
    * Deliver through an endpoint that durably deduplicates this identity. Required
@@ -80,7 +81,10 @@ export interface Transport<Mutations extends TransportMutations = EmptyTransport
     input: Mutations[K]['input'],
     select: Set<string>,
     identity: MutationIdentity,
+    selectionArgs?: ResolvedArgsPayload,
   ): Promise<Mutations[K]['output']>;
+  /** Receive mutation selection arguments separately from the mutation input. */
+  separateMutationSelectionArgs?: boolean;
   subscribeById?(
     type: string,
     id: string | number,

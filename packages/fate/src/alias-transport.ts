@@ -137,10 +137,11 @@ export const withAliasSupport = <M extends Record<string, MutationShape>>(
   const mutation = (
     select: Set<string>,
     input: unknown,
-    execute: (select: Set<string>, input: unknown) => Promise<unknown>,
+    selectionArgs: AnyRecord | undefined,
+    execute: (select: Set<string>, input: unknown, selectionArgs?: AnyRecord) => Promise<unknown>,
   ) => {
     if (![...select].some((path) => path.includes(':'))) {
-      return execute(select, input);
+      return execute(select, input, selectionArgs);
     }
     const groups = groupsFor(select);
     if (groups.length > 1) {
@@ -150,10 +151,14 @@ export const withAliasSupport = <M extends Record<string, MutationShape>>(
     }
     const group = groups[0];
     const nextInput =
-      isRecord(input) && isRecord(input.args)
+      !transport.separateMutationSelectionArgs && isRecord(input) && isRecord(input.args)
         ? { ...input, args: scopedArgs(input.args, group) }
         : input;
-    return execute(group.paths, nextInput).then((value) => project(value, group.tree));
+    return execute(
+      group.paths,
+      nextInput,
+      transport.separateMutationSelectionArgs ? scopedArgs(selectionArgs, group) : selectionArgs,
+    ).then((value) => project(value, group.tree));
   };
   return {
     ...transport,
@@ -172,15 +177,25 @@ export const withAliasSupport = <M extends Record<string, MutationShape>>(
           read(select, args, (fields, scoped) => transport.fetchQuery!(name, fields, scoped))
       : undefined,
     mutate: transport.mutate
-      ? (name, input, select) =>
-          mutation(select, input, (fields, nextInput) =>
-            transport.mutate!(name, nextInput as never, fields),
+      ? (name, input, select, selectionArgs) =>
+          mutation(select, input, selectionArgs, (fields, nextInput, nextSelectionArgs) =>
+            transport.separateMutationSelectionArgs
+              ? transport.mutate!(name, nextInput as never, fields, nextSelectionArgs)
+              : transport.mutate!(name, nextInput as never, fields),
           ) as never
       : undefined,
     mutateDurably: transport.mutateDurably
-      ? (name, input, select, identity) =>
-          mutation(select, input, (fields, nextInput) =>
-            transport.mutateDurably!(name, nextInput as never, fields, identity),
+      ? (name, input, select, identity, selectionArgs) =>
+          mutation(select, input, selectionArgs, (fields, nextInput, nextSelectionArgs) =>
+            transport.separateMutationSelectionArgs
+              ? transport.mutateDurably!(
+                  name,
+                  nextInput as never,
+                  fields,
+                  identity,
+                  nextSelectionArgs,
+                )
+              : transport.mutateDurably!(name, nextInput as never, fields, identity),
           ) as never
       : undefined,
     subscribeById: transport.subscribeById
