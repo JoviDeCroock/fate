@@ -544,6 +544,13 @@ ${Object.entries(argumentSchema.fields[type] ?? {})
     name: lowerTypeName(entry.type),
     type: entry.type,
   }));
+  const nullableRoot = (name: string) => {
+    if (!argumentSchema) {
+      return false;
+    }
+    const field = graphQLConfig.roots?.[name]?.field ?? name;
+    return !argumentSchema.outputs?.[argumentSchema.queryType]?.[field]?.endsWith('!');
+  };
   const mutationEntries = Object.entries(graphQLConfig.mutations ?? {}).map(([name, config]) => ({
     entity: config.entity,
     field: config.field,
@@ -567,7 +574,7 @@ ${Object.entries(argumentSchema.fields[type] ?? {})
             ? `{
   items: Array<{ cursor?: string; node: ${root.type} }>;
   pagination: import('${clientModule}').Pagination;
-}`
+}${nullableRoot(name) ? ' | null' : ''}`
             : `${root.type} | null`
         }, '${root.type}'${rootArgumentsType(name, root.type)}>('${root.type}'),`,
       })),

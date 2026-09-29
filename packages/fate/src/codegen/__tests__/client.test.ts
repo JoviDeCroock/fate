@@ -120,6 +120,25 @@ test('uses schema object shapes for generated nested cache relations', () => {
   expect(source).toContain("messages: { listOf: 'Message', array: true }");
 });
 
+test('generates nullable connection result types from GraphQL schema', () => {
+  type Post = { __typename: 'Post'; id: string };
+  const post = dataView<Post>('Post')({ id: true });
+  const source = createClientSource({
+    moduleExports: {
+      fateGraphQL: {
+        schema:
+          'type Query { posts: PostConnection } type PostConnection { edges: [PostEdge] pageInfo: PageInfo! } type PostEdge { cursor: String node: Post } type PageInfo { hasNextPage: Boolean! } type Post { id: ID! }',
+      },
+      post,
+      Root: { posts: list(post) },
+    },
+    moduleName: '@org/blog',
+    transport: 'graphql',
+  });
+
+  expect(source).toContain("} | null, 'Post'");
+});
+
 test('generates the same client source for the Prisma and Drizzle examples', async () => {
   setExampleEnv();
 

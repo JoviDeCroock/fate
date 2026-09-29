@@ -2,7 +2,7 @@ import { afterEach, expect, test, vi } from 'vite-plus/test';
 import { createClient } from '../client.ts';
 import type { PersistenceSession } from '../persistence-types.ts';
 import { createPersistence } from '../persistence.ts';
-import { clientRoot } from '../root.ts';
+import { clientRoot, clientValueRoot } from '../root.ts';
 import { view } from '../view.ts';
 import { memoryStorage } from './persistenceStorage.ts';
 
@@ -63,6 +63,60 @@ const clock = () => {
     now += duration;
   };
 };
+
+test('restores a persisted scalar root without fetching again', async () => {
+  const storage = memoryStorage();
+  const fetchQuery = vi.fn(async () => false);
+  const roots = { origin: clientValueRoot<boolean>() };
+  const create = () => {
+    const client = createClient({
+      persistence: createPersistence({ key: 'scalar-root', online: () => false, storage }),
+      roots,
+      transport: { fetchById: async () => [], fetchQuery },
+      types: [],
+    });
+    sessions.push(client.persistence!);
+    return client;
+  };
+  const request = { origin: { value: true } } as const;
+  const first = create();
+  await expect(first.request(request)).resolves.toEqual({ origin: false });
+  await first.persistence!.flush();
+  first.persistence!.dispose();
+  fetchQuery.mockImplementation(async () => {
+    throw new TypeError('Offline');
+  });
+  const next = create();
+  await expect(next.request(request)).resolves.toEqual({ origin: false });
+  expect(fetchQuery).toHaveBeenCalledTimes(1);
+});
+
+test('restores a persisted null root connection without fetching again', async () => {
+  const storage = memoryStorage();
+  const fetchList = vi.fn(async () => null);
+  const roots = { posts: clientRoot<{ items: Array<{ node: Note }> } | null, 'Note'>('Note') };
+  const create = () => {
+    const client = createClient({
+      persistence: createPersistence({ key: 'null-list', online: () => false, storage }),
+      roots,
+      transport: { fetchById: async () => [], fetchList },
+      types: [{ type: 'Note' }],
+    });
+    sessions.push(client.persistence!);
+    return client;
+  };
+  const request = { posts: { list: { items: { node: Title } } } } as const;
+  const first = create();
+  await expect(first.request(request)).resolves.toEqual({ posts: null });
+  await first.persistence!.flush();
+  first.persistence!.dispose();
+  fetchList.mockImplementation(async () => {
+    throw new TypeError('Offline');
+  });
+  const next = create();
+  await expect(next.request(request)).resolves.toEqual({ posts: null });
+  expect(fetchList).toHaveBeenCalledTimes(1);
+});
 
 test('disk survives memory GC and startup does not restore unrelated records', async () => {
   const first = setup();

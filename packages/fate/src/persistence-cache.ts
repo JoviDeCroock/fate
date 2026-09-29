@@ -106,6 +106,7 @@ const stamp = (time: number) => String(time).padStart(16, '0');
 const recordKey = (id: string) => `r:${id}`;
 const listKey = (id: string) => `l:${id}`;
 const queryKey = (id: string) => `q:${id}`;
+const valueKey = (id: string) => `v:${id}`;
 const pathsOverlap = (path: string, selected: string) =>
   path === selected || path.startsWith(`${selected}.`) || selected.startsWith(`${path}.`);
 const projectRecord = (value: RecordValue, paths: Array<string>): RecordValue => {
@@ -633,6 +634,9 @@ export class PersistenceCache {
     const readNode = async (key: string): Promise<unknown> => {
       await this.step();
       if (readsMemory) {
+        if (key.startsWith('v:')) {
+          return this.client.getPersistenceValue(key.slice(2));
+        }
         if (this.flushingNodes.values.has(key)) {
           const incoming = this.flushingNodes.values.get(key);
           const base = this.flushingNodes.listBases.get(key);
@@ -761,8 +765,22 @@ export class PersistenceCache {
         if (typeof id === 'string') {
           queue.push({ id, paths, plan: item.plan, prefix: '' });
         }
+      } else if (item.kind === 'value') {
+        const key = valueKey(item.queryKey);
+        const value = await readNode(key);
+        if (value === undefined) {
+          complete = false;
+          continue;
+        }
+        nodes.set(key, { paths: new Set(), value });
       } else if (item.kind === 'list') {
-        await addList(item.listKey, paths, item.plan, '');
+        const key = valueKey(`list:${item.listKey}`);
+        const nullValue = await readNode(key);
+        if (nullValue !== undefined) {
+          nodes.set(key, { paths: new Set(), value: nullValue });
+        } else {
+          await addList(item.listKey, paths, item.plan, '');
+        }
       }
     }
     for (let index = 0; index < queue.length; index++) {
@@ -860,6 +878,7 @@ export class PersistenceCache {
           const state: ClientHydrationState = {
             rootLists: [],
             rootRequests: [],
+            rootValues: [],
             store: { coverage: [], lists: [], records: [] },
           };
           if (key.startsWith('r:')) {
@@ -877,6 +896,8 @@ export class PersistenceCache {
                 (state.rootLists as Array<unknown>).push([item.type, [id]]);
               }
             }
+          } else if (key.startsWith('v:')) {
+            (state.rootValues as Array<unknown>).push([id, node.value]);
           } else {
             (state.rootRequests as Array<unknown>).push([id, node.value]);
           }

@@ -401,6 +401,12 @@ type ConnectionNodeType<Root> = Root extends { items?: { node?: infer Node } }
   ? ViewEntityName<Node & View<any, any>>
   : never;
 
+type NullableRootResult<Result> = unknown extends Result
+  ? never
+  : null extends Result
+    ? null
+    : never;
+
 type ListResult<Item extends AnyRequestItem, Type extends TypeName, Result> = Item extends ValueItem
   ? Result
   : Item extends AnyNodeItem
@@ -412,15 +418,17 @@ type ListResult<Item extends AnyRequestItem, Type extends TypeName, Result> = It
           ? ViewRef<Type> | null
           : ViewRef<Type>
         : Item extends AnyListItem
-          ? Item['list'] extends { items?: { node?: View<any, any> } }
-            ? Readonly<{
-                items: ReadonlyArray<{
-                  cursor?: string | undefined;
-                  node: ViewRef<ConnectionNodeType<Item['list']>>;
-                }>;
-                pagination?: Pagination;
-              }>
-            : Array<ViewRef<Type>>
+          ?
+              | (Item['list'] extends { items?: { node?: View<any, any> } }
+                  ? Readonly<{
+                      items: ReadonlyArray<{
+                        cursor?: string | undefined;
+                        node: ViewRef<ConnectionNodeType<Item['list']>>;
+                      }>;
+                      pagination?: Pagination;
+                    }>
+                  : Array<ViewRef<Type>>)
+              | NullableRootResult<Result>
           : never;
 
 /**

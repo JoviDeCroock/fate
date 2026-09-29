@@ -714,6 +714,11 @@ export class FateClient<
     return this.rootRequests.get(key);
   }
 
+  /** @internal */
+  getPersistenceValue(key: string) {
+    return this.rootValues.get(key);
+  }
+
   /** @internal Merge a small disk read beneath optimistic layers. */
   restorePersistenceData(state: ClientHydrationState) {
     this.store.update(() => {
@@ -1973,12 +1978,17 @@ export class FateClient<
 
       const requestArgs = omitUndefinedValues({ ...connection.args, ...args });
       const { argsPayload, plan } = resolveSelectionPlan(view, requestArgs);
-      const { items, pagination } = await this.transport.fetchList(
+      const connectionResult = await this.transport.fetchList(
         connection.field,
         plan.paths,
         argsPayload,
       );
       this.assertPersistenceActive();
+
+      if (connectionResult === null) {
+        return this.store.getListState(connection.key);
+      }
+      const { items, pagination } = connectionResult;
 
       if (!items) {
         return this.store.getListState(connection.key);
@@ -2330,6 +2340,7 @@ export class FateClient<
 
         if (item.kind === 'list') {
           markList(item.listKey);
+          retainedValueKeys.add(`list:${item.listKey}`);
         }
       }
     }
@@ -2576,6 +2587,9 @@ export class FateClient<
   }
 
   private hasRootListData(item: ListRequestDescriptor): boolean {
+    if (this.rootValues.has(`list:${item.listKey}`)) {
+      return true;
+    }
     const listState = this.store.getListState(item.listKey);
     if (!listState) {
       return false;
@@ -2808,6 +2822,11 @@ export class FateClient<
         continue;
       }
 
+      if (this.rootValues.has(`list:${item.listKey}`)) {
+        result[item.name] = null;
+        continue;
+      }
+
       const listState = this.store.getListState(item.listKey);
       const entries = getListEntries(listState);
       const nodes = entries.map(({ id }) => {
@@ -2904,12 +2923,18 @@ export class FateClient<
     }
 
     await this.trackPendingRequest(async () => {
-      const { items, pagination } = await this.transport.fetchList!(
+      const connection = await this.transport.fetchList!(
         item.name,
         item.plan.paths,
         item.argsPayload,
       );
       this.assertPersistenceActive();
+      if (connection === null) {
+        this.rootValues.set(`list:${item.listKey}`, null);
+        return;
+      }
+      this.rootValues.delete(`list:${item.listKey}`);
+      const { items, pagination } = connection;
       this.store.update(() => {
         const ids: Array<EntityId> = [];
         const cursors: Array<string | undefined> = [];

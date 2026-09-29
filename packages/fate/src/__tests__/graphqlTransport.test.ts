@@ -4,7 +4,8 @@ import { createClient } from '../client.ts';
 import { createGraphQLArgumentSchema } from '../codegen/graphql.ts';
 import { createGraphQLTransport } from '../graphqlTransport.ts';
 import { valueMutation } from '../mutation.ts';
-import { clientValueRoot } from '../root.ts';
+import { clientRoot, clientValueRoot } from '../root.ts';
+import { view } from '../view.ts';
 
 const graphQLSSE = vi.hoisted(() => ({
   createClient: vi.fn(),
@@ -323,6 +324,30 @@ test('selects arrays of embedded objects without identity or connection fields',
   expect(validate(schema, parse(query))).toEqual([]);
   expect(query).toContain('ownedRelics { bonus { power } name }');
   expect(query).not.toContain('ownedRelics { edges');
+});
+
+test('preserves nullable root connections through caching and hydration', async () => {
+  type Post = { __typename: 'Post'; id: string; title: string };
+  const fetch = vi.fn(async () => jsonResponse({ data: { f1: null } }));
+  const transport = createGraphQLTransport({
+    fetch,
+    live: false,
+    roots: { posts: { connection: 'relay', type: 'Post' } },
+    types: [{ type: 'Post' }],
+    url: '/graphql',
+  });
+  const roots = { posts: clientRoot<{ items: Array<{ node: Post }> } | null, 'Post'>('Post') };
+  const client = createClient({ roots, transport, types: [{ type: 'Post' }] });
+  const postView = view<Post>()({ id: true, title: true });
+  const request = { posts: { list: { items: { node: postView } } } } as const;
+
+  await expect(client.request(request)).resolves.toEqual({ posts: null });
+  await expect(client.request(request)).resolves.toEqual({ posts: null });
+  expect(fetch).toHaveBeenCalledTimes(1);
+  const restored = createClient({ roots, transport, types: [{ type: 'Post' }] });
+  restored.hydrate(client.dehydrate());
+  await expect(restored.request(request)).resolves.toEqual({ posts: null });
+  expect(fetch).toHaveBeenCalledTimes(1);
 });
 
 test('fetches nodes through the Relay nodes field and decodes global ids', async () => {

@@ -895,7 +895,7 @@ export function createGraphQLTransport<
       }) as Promise<{
         items: Array<{ cursor: string | undefined; node: unknown }>;
         pagination: Pagination;
-      }>;
+      } | null>;
     },
     fetchQuery(name, select, args) {
       const root = roots?.[name];
