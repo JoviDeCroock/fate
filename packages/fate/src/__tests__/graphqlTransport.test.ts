@@ -1,4 +1,6 @@
+import { buildSchema, graphql } from 'graphql';
 import { beforeEach, expect, test, vi } from 'vite-plus/test';
+import { createGraphQLArgumentSchema } from '../codegen/graphql.ts';
 import { createGraphQLTransport } from '../graphqlTransport.ts';
 
 const graphQLSSE = vi.hoisted(() => ({
@@ -337,4 +339,189 @@ test('multiplexes live GraphQL subscriptions over one SSE client', async () => {
   unsubscribeConnectionResult?.();
   expect(unsubscribeNode).toHaveBeenCalledTimes(1);
   expect(unsubscribeConnection).toHaveBeenCalledTimes(1);
+});
+
+test('executes enum arguments as schema-typed variables', async () => {
+  const schema = buildSchema(`
+    enum Biome { Grassland Desert }
+    type Map { id: ID!, name: String! }
+    type Query { map(biome: Biome!): Map! }
+  `);
+  const fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body));
+    return jsonResponse(
+      await graphql({
+        rootValue: { map: ({ biome }: { biome: string }) => ({ id: 'Map-1', name: biome }) },
+        schema,
+        source: body.query,
+        variableValues: body.variables,
+      }),
+    );
+  });
+  const transport = createGraphQLTransport({
+    fetch,
+    roots: { map: { type: 'Map' } },
+    schema: createGraphQLArgumentSchema(schema),
+    types: [{ type: 'Map' }],
+    url: '/graphql',
+  });
+
+  await expect(
+    transport.fetchQuery?.('map', new Set(['name']), { biome: 'Grassland' }),
+  ).resolves.toMatchObject({ id: '1', name: 'Grassland' });
+  const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body));
+  expect(body.query).toMatch(/\$\w+: Biome!/);
+  expect(body.query).not.toContain('Grassland');
+  expect(Object.values(body.variables)).toEqual(['Grassland']);
+});
+
+const argumentSDL = `
+  enum Biome { Grassland Desert }
+  input Filter { biome: Biome!, biomes: [Biome!], limit: Int! = 4, next: Filter }
+  type Map implements Node { id: ID!, name: String!, related(biome: Biome!): Map!, state(biome: Biome!): String! }
+  interface Node { id: ID! }
+  type Edge { cursor: String!, node: Map! }
+  type PageInfo { endCursor: String, startCursor: String, hasNextPage: Boolean!, hasPreviousPage: Boolean! }
+  type Connection { edges: [Edge!]!, pageInfo: PageInfo! }
+  type Query { maps(filter: Filter!, first: Int = 2): Connection!, map(biome: Biome!): Map!, nodes(ids: [ID!]!): [Node]! }
+  type Mutation { update(input: Filter!): Map!, edit(biome: Biome!): Map! }
+`;
+
+const pageInfo = { hasNextPage: false, hasPreviousPage: false };
+
+const resolveMap = ({ biome }: { biome: string }) => ({
+  id: 'Map-1',
+  name: biome,
+  related: ({ biome }: { biome: string }) => resolveMap({ biome }),
+  state: ({ biome }: { biome: string }) => biome,
+});
+
+const createArgumentTransport = () => {
+  const schema = buildSchema(argumentSDL);
+  const maps = vi.fn(({ filter }: { filter: { biome: string } }) => ({
+    edges: [{ cursor: 'one', node: resolveMap(filter) }],
+    pageInfo,
+  }));
+  const update = vi.fn(({ input }: { input: { biome: string } }) => resolveMap(input));
+  const fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+    const { query, variables } = JSON.parse(String(init?.body));
+    return jsonResponse(
+      await graphql({
+        rootValue: { edit: resolveMap, map: resolveMap, maps, nodes: () => [], update },
+        schema,
+        source: query,
+        variableValues: variables,
+      }),
+    );
+  });
+  const transport = createGraphQLTransport<{
+    edit: { input: { args?: object; biome: string }; output: unknown };
+    update: { input: { args?: object; biome: string }; output: unknown };
+  }>({
+    fetch,
+    mutations: {
+      edit: { entity: 'Map', field: 'edit', inputArg: false },
+      update: { entity: 'Map', field: 'update' },
+    },
+    roots: { map: { type: 'Map' }, maps: { type: 'Map' } },
+    schema: createGraphQLArgumentSchema(schema),
+    types: [{ fields: { related: { type: 'Map' } }, type: 'Map' }],
+    url: '/graphql',
+  });
+  return { fetch, maps, transport, update };
+};
+
+test('batches independent variables and preserves input defaults and explicit nulls', async () => {
+  const { fetch, maps, transport } = createArgumentTransport();
+  const [list, map] = await Promise.all([
+    transport.fetchList?.('maps', new Set(['name', 'state']), {
+      filter: { biome: 'Grassland', biomes: ['Grassland', 'Desert'], limit: undefined, next: null },
+      first: undefined,
+      state: { biome: 'Desert' },
+    }),
+    transport.fetchQuery?.('map', new Set(['name']), { biome: 'Desert' }),
+  ]);
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(list?.items[0].node).toMatchObject({ name: 'Grassland', state: 'Desert' });
+  expect(map).toMatchObject({ name: 'Desert' });
+  expect(maps.mock.calls[0][0]).toMatchObject({
+    filter: { biome: 'Grassland', biomes: ['Grassland', 'Desert'], limit: 4, next: null },
+    first: 2,
+  });
+  const { query, variables } = JSON.parse(String(fetch.mock.calls[0][1]?.body));
+  expect(query).toContain('Filter!');
+  expect(query).not.toContain('Grassland');
+  expect(Object.values(variables)).toContainEqual({
+    biome: 'Grassland',
+    biomes: ['Grassland', 'Desert'],
+    next: null,
+  });
+});
+
+test('keeps query and mutation variables separate and strips mutation selection metadata', async () => {
+  const { fetch, transport, update } = createArgumentTransport();
+  const results = await Promise.all([
+    transport.fetchQuery?.('map', new Set(['name']), { biome: 'Desert' }),
+    transport.mutate?.(
+      'update',
+      { args: { state: { biome: 'Desert' } }, biome: 'Grassland' },
+      new Set(['name', 'state']),
+    ),
+    transport.mutate?.('edit', { biome: 'Desert' }, new Set(['name'])),
+  ]);
+  expect(results).toMatchObject([
+    { name: 'Desert' },
+    { name: 'Grassland', state: 'Desert' },
+    { name: 'Desert' },
+  ]);
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(update.mock.calls[0][0]).toEqual({ input: { biome: 'Grassland', limit: 4 } });
+  const bodies = fetch.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
+  expect(Object.keys(bodies[0].variables)).toHaveLength(1);
+  expect(Object.keys(bodies[1].variables)).toHaveLength(3);
+});
+
+test.each([
+  [{ filter: { biome: 'Lava' } }, /filter.biome/],
+  [{ filter: { biome: 'Grassland', typo: true } }, /filter.typo/],
+  [{ filter: { biome: 'Grassland', biomes: [null] } }, /biomes\[0\]/],
+  [{ filter: { biome: 'Grassland', limit: null } }, /filter.limit/],
+  [{ filter: { biome: 'Grassland', limit: 1.5 } }, /filter.limit/],
+  [{ filter: { biome: 'Grassland', next: { biome: 'Lava' } } }, /next.biome/],
+  [{}, /maps.filter/],
+  [{ filter: null }, /maps.filter/],
+  [{ filter: { biome: 'Grassland' }, typo: 1 }, /maps.typo/],
+] as const)('rejects invalid schema arguments before sending a request: %j', (args, error) => {
+  const { fetch, transport } = createArgumentTransport();
+  expect(() => transport.fetchList?.('maps', new Set(['name']), args)).toThrow(error);
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+test('validates selected fields and required nested arguments', () => {
+  const { fetch, transport } = createArgumentTransport();
+  expect(() => transport.fetchQuery?.('map', new Set(['state']), { biome: 'Grassland' })).toThrow(
+    /Map.state.biome/,
+  );
+  expect(() => transport.fetchQuery?.('map', new Set(['typo']), { biome: 'Grassland' })).toThrow(
+    /Map.typo/,
+  );
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+test('declares node IDs using the schema variable type', async () => {
+  const { fetch, transport } = createArgumentTransport();
+  await expect(transport.fetchById('Map', ['1'], new Set(['name']))).resolves.toEqual([]);
+  const { query, variables } = JSON.parse(String(fetch.mock.calls[0][1]?.body));
+  expect(query).toMatch(/\$\w+: \[ID!\]!/);
+  expect(Object.values(variables)).toEqual([['Map-1']]);
+});
+
+test('separates arguments at every nested selection level', async () => {
+  const { transport } = createArgumentTransport();
+  await expect(
+    transport.fetchQuery?.('map', new Set(['related.name', 'related.state']), {
+      biome: 'Grassland',
+      related: { biome: 'Desert', state: { biome: 'Grassland' } },
+    }),
+  ).resolves.toMatchObject({ related: { name: 'Desert', state: 'Grassland' } });
 });

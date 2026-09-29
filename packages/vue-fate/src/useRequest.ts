@@ -1,5 +1,6 @@
 import {
   type FateClient as FateClientT,
+  type CheckedRequest,
   type FateRoots,
   type Request,
   type RequestOptions,
@@ -42,8 +43,8 @@ const releaseDisposable = (dispose: (() => void) | null) => {
 /**
  * Declares the data a component or screen needs and exposes it as a Vue resource.
  */
-export function useRequest<R extends Request, O extends FateRoots = Roots>(
-  request: MaybeRefOrGetter<R>,
+export function useRequest<const R extends Request, O extends FateRoots = Roots>(
+  request: MaybeRefOrGetter<CheckedRequest<O, R>>,
   options?: RequestOptions,
 ): RequestResource<RequestResult<O, R>> {
   const clientSource = getFateClientSource(useFateClient());

@@ -9,6 +9,7 @@
 
 export type {
   AnyRecord as FateRecord,
+  CheckedRequest,
   ConnectionMetadata,
   ConnectionRef,
   Deferred,
@@ -85,3 +86,5 @@ export type {
   MutationIdentity,
   RequestPersistenceOptions,
 } from './persistence-types.ts';
+
+export type { GraphQLArgumentSchema } from './graphqlSchema.ts';

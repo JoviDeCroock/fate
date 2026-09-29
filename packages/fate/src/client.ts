@@ -70,6 +70,7 @@ import {
   ViewResult,
   ViewsTag,
   type AnyRecord,
+  type CheckedRequest,
   type Deferred,
   type Entity,
   type EntityId,
@@ -2080,8 +2081,8 @@ export class FateClient<
     return this.store.getListState(connection.key);
   }
 
-  request<R extends Request>(
-    request: R,
+  request<const R extends Request>(
+    request: CheckedRequest<Roots, R>,
     options?: RequestOptions,
   ): Promise<RequestResult<Roots, R>> {
     const mode = options?.mode ?? 'cache-first';

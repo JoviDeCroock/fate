@@ -247,3 +247,5 @@ export const fate = (options: FateVitePluginOptions): Plugin => {
     resolveId: (id) => (clientModules.has(id) ? resolvedClientModule : undefined),
   };
 };
+
+export { createGraphQLArgumentSchema } from './codegen/graphql.ts';

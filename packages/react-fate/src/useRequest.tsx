@@ -1,5 +1,6 @@
 import {
   type FateClient as FateClientT,
+  type CheckedRequest,
   FateRoots,
   RequestResult,
   type Request,
@@ -22,8 +23,8 @@ export type Roots = [GeneratedFateClient] extends [never]
  * @example
  * const { posts } = useRequest({ posts: { list: PostView } });
  */
-export function useRequest<R extends Request, O extends FateRoots = Roots>(
-  request: R,
+export function useRequest<const R extends Request, O extends FateRoots = Roots>(
+  request: CheckedRequest<O, R>,
   options?: RequestOptions,
 ): RequestResult<O, R> {
   const client = useFateClient();

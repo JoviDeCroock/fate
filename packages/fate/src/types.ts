@@ -31,6 +31,7 @@ export declare const __FateMutationInputBrand: unique symbol;
 export declare const __FateMutationResultBrand: unique symbol;
 export declare const __FateRootResultBrand: unique symbol;
 export declare const __FateRootTypeBrand: unique symbol;
+export declare const __FateRootArgsBrand: unique symbol;
 export declare const __FateDeferredBrand: unique symbol;
 
 type __ViewEntityAnchor<T extends Entity> = {
@@ -424,6 +425,22 @@ export type RequestResult<R extends FateRoots, Q extends AnyRequest> = {
   [K in keyof Q]: K extends keyof R ? ListResult<Q[K], RootType<R[K]>, RootResult<R[K]>> : never;
 };
 
+/** Applies generated argument contracts while preserving inference of request results. */
+export type CheckedRequest<Roots extends FateRoots, R extends Request> = R & {
+  [K in keyof R]: R[K] extends AnyNodeItem | AnyNodesItem
+    ? unknown
+    : K extends keyof Roots
+      ? Roots[K] extends { readonly [__FateRootArgsBrand]?: infer Args }
+        ? string extends keyof Args
+          ? unknown
+          : (Record<never, never> extends Args ? { args?: Args } : { args: Args }) &
+              (R[K] extends { args: infer Actual }
+                ? { args: { [Extra in Exclude<keyof Actual, keyof Args>]: never } }
+                : unknown)
+        : unknown
+      : unknown;
+};
+
 /** Indicates whether a request item represents an explicit node ID. */
 export function isNodeItem(item: AnyRequestItem): item is AnyNodeItem {
   return 'id' in item;
@@ -445,7 +462,8 @@ export const RootKind = '__fate__root';
 export const MutationKind = '__fate__mutation';
 
 /** Metadata describing a root query for a particular entity and result shape. */
-export type RootDefinition<Type extends TypeName, Result> = Readonly<{
+export type RootDefinition<Type extends TypeName, Result, Args = AnyRecord> = Readonly<{
+  readonly [__FateRootArgsBrand]?: Args;
   [RootKind]: true;
   type: Type;
 }> &

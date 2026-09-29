@@ -343,3 +343,49 @@ const fate = createFateClient({
 The GraphQL transport is intentionally a mapping layer. It does not require `createFateServer`, the Prisma adapter, or the Drizzle adapter. Your GraphQL server remains responsible for authorization, validation, resolver behavior, cursor pagination, and mutation side effects.
 
 Use data views to expose only the fields the client should be able to select, keep GraphQL schema authorization in your server, and treat `src/fate/graphql.ts` as the contract between your GraphQL API and fate's client.
+
+## Schema-Aware Arguments
+
+Provide your server's schema in the mapping module to generate GraphQL argument contracts and send arguments as typed variables. The `schema` option accepts SDL text or a `GraphQLSchema` object and is evaluated during client generation:
+
+```tsx
+import { readFileSync } from 'node:fs';
+
+export const fateGraphQL = {
+  schema: readFileSync(new URL('./schema.graphql', import.meta.url), 'utf8'),
+  roots: {
+    maps: { field: 'maps' },
+  },
+  mutations: {
+    'map.update': graphqlMutation<Map, UpdateMapInput, Map>('Map', {
+      field: 'updateMap',
+      inputArg: false,
+    }),
+  },
+};
+```
+
+Install `graphql` in the package performing generation when passing SDL. Run `fate generate` again after updating the schema. Generated browser code contains argument metadata, not the SDL or GraphQL parser. Existing clients without a schema retain literal argument serialization; use schema-aware generation for enums.
+
+For example, given `maps(biome: Biome)`, an argument `{ biome: 'Grassland' }` is sent as a variable declared with type `Biome`, rather than an invalid quoted enum literal. Variables also work for nested field arguments, input objects, lists, node IDs, and mutations. Batched operations use distinct variable names and separate query and mutation payloads. Mutation selection arguments are kept out of mutation inputs.
+
+The generated client enforces root arguments in `client.request` and the React/Vue `useRequest` adapters. Mutation inputs are derived from the schema using the configured `inputArg`, replacing the manually declared input type for generated clients. Non-null arguments are required unless the schema supplies a default. Omitting an optional/defaulted value preserves its server default; explicit `null` remains distinct.
+
+Generation also exports `GraphQLInputs`, `GraphQLFieldArguments`, and `GraphQLSelectionArguments` from `.fate/client.generated.ts`. Use field contracts to check arguments inside reusable views:
+
+```tsx
+import type { GraphQLFieldArguments } from '../.fate/client.generated.ts';
+
+const stateArgs = {
+  biome: 'Grassland',
+} satisfies GraphQLFieldArguments['Map']['state'];
+
+const MapView = view<Map>()({
+  id: true,
+  state: { args: stateArgs },
+});
+```
+
+At runtime the transport checks selected field names, argument names, enum values, required inputs, built-in scalar types, and nested input objects before issuing an HTTP request. Custom scalar values have TypeScript type `unknown` and remain subject to server validation. These contracts cover arguments; they do not add support for GraphQL result shapes that the transport otherwise does not support.
+
+For a manually constructed transport, extract metadata on the build/server side with `createGraphQLArgumentSchema` from `@nkzw/fate/vite`, then pass the serialized result as the transport's `schema` option. Keep that build-time helper out of browser modules.

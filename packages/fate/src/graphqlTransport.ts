@@ -1,3 +1,4 @@
+import { validateGraphQLArguments, type GraphQLArgumentSchema } from './graphqlSchema.ts';
 import { isRecord } from './record.ts';
 import type { Transport } from './transport.ts';
 import type { AnyRecord, Entity, MutationShape, Pagination, TypeConfig } from './types.ts';
@@ -78,6 +79,7 @@ export type GraphQLTransportOptions<
   mutateDurably?: Transport<Mutations>['mutateDurably'];
   mutations?: Record<Extract<keyof Mutations, string>, GraphQLMutationRuntimeConfig>;
   roots?: Record<string, GraphQLRootConfig>;
+  schema?: GraphQLArgumentSchema;
   types: ReadonlyArray<Omit<TypeConfig, 'getId'> & Partial<Pick<TypeConfig, 'getId'>>>;
   url: string | URL;
 };
@@ -100,6 +102,7 @@ type PendingOperation = {
   resolve: (value: unknown) => void;
   selection: string;
   transform: (value: unknown) => unknown;
+  variables?: Record<string, { type: string; value: unknown }>;
 };
 
 type SelectionTree = Map<string, SelectionTree>;
@@ -321,20 +324,25 @@ const getTypeConfig = (types: ReadonlyMap<string, TypeConfig>, type: string): Ty
 
 const rootArgsToGraphQL = ({
   args,
+  argumentsForField,
+  field,
+  schema,
   type,
   types,
 }: {
   args?: Record<string, unknown>;
+  argumentsForField: ArgumentsForField;
+  field: string;
+  schema?: GraphQLArgumentSchema;
   type: string;
   types: ReadonlyMap<string, TypeConfig>;
 }) => {
-  if (!args) {
-    return '';
+  if (schema) {
+    return argumentsForField(schema.queryType, field, args, type);
   }
-
   const fields = getTypeConfig(types, type).fields ?? {};
   const rootArgs = Object.fromEntries(
-    Object.entries(args).filter(([key]) => {
+    Object.entries(args ?? {}).filter(([key]) => {
       const descriptor = fields[key];
       return !(
         descriptor &&
@@ -344,7 +352,7 @@ const rootArgsToGraphQL = ({
     }),
   );
 
-  return argsToGraphQL(rootArgs);
+  return argumentsForField('Query', field, rootArgs);
 };
 
 const buildSelectionTree = (select: Iterable<string>): SelectionTree => {
@@ -369,14 +377,23 @@ const buildSelectionTree = (select: Iterable<string>): SelectionTree => {
   return root;
 };
 
+type ArgumentsForField = (
+  type: string,
+  field: string,
+  args?: Record<string, unknown>,
+  resultType?: string,
+) => string;
+
 const buildRecordSelection = ({
   args,
+  argumentsForField,
   path,
   select,
   type,
   types,
 }: {
   args?: Record<string, unknown>;
+  argumentsForField: ArgumentsForField;
   path: string;
   select: Iterable<string>;
   type: string;
@@ -399,21 +416,29 @@ const buildRecordSelection = ({
       const descriptor = config.fields?.[field];
       const fieldPath = currentPath ? `${currentPath}.${field}` : field;
       const fieldName = assertIdentifier(field, 'field');
+      const resultType =
+        descriptor && typeof descriptor === 'object'
+          ? 'type' in descriptor
+            ? descriptor.type
+            : descriptor.listOf
+          : undefined;
+      const fieldArguments = argumentsForField(
+        currentType,
+        field,
+        getArgsAtPath(args, fieldPath),
+        resultType,
+      );
 
       if (descriptor && typeof descriptor === 'object' && 'type' in descriptor) {
         lines.push(
-          `${fieldName}${argsToGraphQL(getArgsAtPath(args, fieldPath))} { ${walk(
-            descriptor.type,
-            childTree,
-            fieldPath,
-          )} }`,
+          `${fieldName}${fieldArguments} { ${walk(descriptor.type, childTree, fieldPath)} }`,
         );
         continue;
       }
 
       if (descriptor && typeof descriptor === 'object' && 'listOf' in descriptor) {
         lines.push(
-          `${fieldName}${argsToGraphQL(getArgsAtPath(args, fieldPath))} { edges { cursor node { ${walk(
+          `${fieldName}${fieldArguments} { edges { cursor node { ${walk(
             descriptor.listOf,
             childTree,
             fieldPath,
@@ -422,7 +447,7 @@ const buildRecordSelection = ({
         continue;
       }
 
-      lines.push(fieldName);
+      lines.push(`${fieldName}${fieldArguments}`);
     }
 
     return lines.join(' ');
@@ -524,14 +549,16 @@ const graphQLRequest = async ({
   headers,
   query,
   url,
+  variables,
 }: {
   fetchImpl: FetchLike;
   headers: HeadersFactory | undefined;
   query: string;
   url: string;
+  variables?: Record<string, unknown>;
 }) => {
   const response = await fetchImpl(url, {
-    body: JSON.stringify({ query }),
+    body: JSON.stringify({ query, variables }),
     headers: await requestHeaders({ 'content-type': 'application/json' }, headers),
     method: 'POST',
   });
@@ -587,12 +614,51 @@ export function createGraphQLTransport<
   mutateDurably,
   mutations,
   roots,
+  schema,
   types: typeConfigs,
   url,
 }: GraphQLTransportOptions<Mutations>): Transport<Mutations> {
   const endpoint = normalizeEndpoint(url);
   const types = new Map(typeConfigs.map((type) => [type.type, type as TypeConfig]));
   let nextId = 0;
+  let nextVariableId = 0;
+  const operationArguments = () => {
+    const variables: NonNullable<PendingOperation['variables']> = {};
+    const argumentsForField: ArgumentsForField = (type, field, args, resultType) => {
+      if (!schema) {
+        return argsToGraphQL(args);
+      }
+      const definitions = schema.fields[type]?.[field];
+      if (!definitions) {
+        throw new Error(`fate(graphql): Unknown field '${type}.${field}'.`);
+      }
+      const fieldArgs =
+        resultType && args
+          ? Object.fromEntries(
+              Object.entries(args).filter(([key, value]) => {
+                if (Object.hasOwn(definitions, key) || !isRecord(value)) {
+                  return true;
+                }
+                const nestedArguments = schema.fields[resultType]?.[key];
+                const relation = types.get(resultType)?.fields?.[key];
+                return !(
+                  nestedArguments &&
+                  (Object.keys(nestedArguments).length > 0 ||
+                    (relation && typeof relation === 'object'))
+                );
+              }),
+            )
+          : args;
+      const values = validateGraphQLArguments(schema, definitions, fieldArgs, `${type}.${field}`);
+      const entries = Object.entries(values).map(([key, value]) => {
+        const name = `v${++nextVariableId}`;
+        variables[name] = { type: definitions[key].type, value };
+        return `${key}: $${name}`;
+      });
+      return entries.length ? `(${entries.join(', ')})` : '';
+    };
+    return { argumentsForField, variables };
+  };
   let pending: Array<PendingOperation> = [];
   let scheduled = false;
   let graphQLLiveClient: GraphQLSSEClient | undefined;
@@ -630,13 +696,26 @@ export function createGraphQLTransport<
         }
 
         try {
+          const variables = Object.assign(
+            {},
+            ...operations.map((entry) => entry.variables),
+          ) as NonNullable<PendingOperation['variables']>;
+          const definitions = Object.entries(variables).map(
+            ([name, variable]) => `$${name}: ${variable.type}`,
+          );
+          const variableDefinitions = definitions.length ? `(${definitions.join(', ')})` : '';
           const { data, errors } = await graphQLRequest({
             fetchImpl,
             headers,
-            query: `${kind} Fate${kind === 'query' ? 'Query' : 'Mutation'} { ${operations
+            query: `${kind} Fate${kind === 'query' ? 'Query' : 'Mutation'}${variableDefinitions} { ${operations
               .map((entry) => `${entry.alias}: ${entry.selection}`)
               .join(' ')} }`,
             url: endpoint,
+            variables: schema
+              ? Object.fromEntries(
+                  Object.entries(variables).map(([name, variable]) => [name, variable.value]),
+                )
+              : undefined,
           });
           const aliases = new Set(operations.map((operation) => operation.alias));
           const errorsByAlias = new Map<string, Array<GraphQLErrorPayload>>();
@@ -677,11 +756,19 @@ export function createGraphQLTransport<
 
   const transport: Transport<Mutations> = {
     fetchById(type, ids, select, args) {
+      const { argumentsForField, variables } = operationArguments();
       const globalIds = ids.map((id) => encodeNodeId(type, id));
-      const selection = buildRecordSelection({ args, path: '', select, type, types });
+      const selection = buildRecordSelection({
+        args,
+        argumentsForField,
+        path: '',
+        select,
+        type,
+        types,
+      });
       return enqueue({
         kind: 'query',
-        selection: `nodes(ids: ${graphQLLiteral(globalIds)}) { ... on ${assertIdentifier(
+        selection: `nodes${argumentsForField(schema?.queryType ?? 'Query', 'nodes', { ids: globalIds })} { ... on ${assertIdentifier(
           type,
           'type',
         )} { ${selection} } }`,
@@ -689,6 +776,7 @@ export function createGraphQLTransport<
           (Array.isArray(value) ? value : [])
             .filter(Boolean)
             .map((entry) => normalizeGraphQLValue({ decodeNodeId, type, types, value: entry })),
+        variables,
       }) as Promise<Array<unknown>>;
     },
     fetchList(name, select, args) {
@@ -697,9 +785,24 @@ export function createGraphQLTransport<
         throw new Error(`fate(graphql): Missing root list mapping for '${name}'.`);
       }
 
+      const { argumentsForField, variables } = operationArguments();
       const field = assertIdentifier(root.field ?? name, 'field');
-      const selection = buildRecordSelection({ args, path: '', select, type: root.type, types });
-      const rootArgs = rootArgsToGraphQL({ args, type: root.type, types });
+      const selection = buildRecordSelection({
+        args,
+        argumentsForField,
+        path: '',
+        select,
+        type: root.type,
+        types,
+      });
+      const rootArgs = rootArgsToGraphQL({
+        args,
+        argumentsForField,
+        field,
+        schema,
+        type: root.type,
+        types,
+      });
       return enqueue({
         kind: 'query',
         selection: `${field}${rootArgs} { edges { cursor node { ${selection} } } pageInfo { endCursor hasNextPage hasPreviousPage startCursor } }`,
@@ -710,6 +813,7 @@ export function createGraphQLTransport<
             types,
             value,
           }),
+        variables,
       }) as Promise<{
         items: Array<{ cursor: string | undefined; node: unknown }>;
         pagination: Pagination;
@@ -721,9 +825,24 @@ export function createGraphQLTransport<
         throw new Error(`fate(graphql): Missing root query mapping for '${name}'.`);
       }
 
+      const { argumentsForField, variables } = operationArguments();
       const field = assertIdentifier(root.field ?? name, 'field');
-      const selection = buildRecordSelection({ args, path: '', select, type: root.type, types });
-      const rootArgs = rootArgsToGraphQL({ args, type: root.type, types });
+      const selection = buildRecordSelection({
+        args,
+        argumentsForField,
+        path: '',
+        select,
+        type: root.type,
+        types,
+      });
+      const rootArgs = rootArgsToGraphQL({
+        args,
+        argumentsForField,
+        field,
+        schema,
+        type: root.type,
+        types,
+      });
       return enqueue({
         kind: 'query',
         selection: `${field}${rootArgs} { ${selection} }`,
@@ -734,6 +853,7 @@ export function createGraphQLTransport<
             types,
             value,
           }),
+        variables,
       });
     },
     mutate(name, input, select) {
@@ -742,13 +862,17 @@ export function createGraphQLTransport<
         throw new Error(`fate(graphql): Missing mutation mapping for '${name}'.`);
       }
 
+      const { argumentsForField, variables } = operationArguments();
       const field = assertIdentifier(mutation.field, 'mutation');
+      const { args: selectionArgs, ...wireInput } = isRecord(input) ? input : { args: undefined };
+      const mutationInput = isRecord(input) ? wireInput : input;
       const args =
         mutation.inputArg === false
-          ? ((input ?? {}) as Record<string, unknown>)
-          : { [mutation.inputArg ?? 'input']: input };
+          ? ((mutationInput ?? {}) as Record<string, unknown>)
+          : { [mutation.inputArg ?? 'input']: mutationInput };
       const selection = buildRecordSelection({
-        args: isRecord(input) && isRecord(input.args) ? (input.args as AnyRecord) : undefined,
+        args: isRecord(selectionArgs) ? selectionArgs : undefined,
+        argumentsForField,
         path: '',
         select,
         type: mutation.entity,
@@ -757,7 +881,7 @@ export function createGraphQLTransport<
 
       return enqueue({
         kind: 'mutation',
-        selection: `${field}${argsToGraphQL(args)} { ${selection} }`,
+        selection: `${field}${argumentsForField(schema?.mutationType ?? 'Mutation', field, args)} { ${selection} }`,
         transform: (value) =>
           normalizeGraphQLValue({
             decodeNodeId,
@@ -765,6 +889,7 @@ export function createGraphQLTransport<
             types,
             value,
           }),
+        variables,
       }) as Promise<Mutations[Extract<keyof Mutations, string>]['output']>;
     },
     mutateDurably,
