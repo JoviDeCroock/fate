@@ -1,4 +1,4 @@
-import { buildSchema, graphql } from 'graphql';
+import { buildSchema, graphql, parse, validate } from 'graphql';
 import { beforeEach, expect, test, vi } from 'vite-plus/test';
 import { createClient } from '../client.ts';
 import { createGraphQLArgumentSchema } from '../codegen/graphql.ts';
@@ -97,6 +97,42 @@ test('returns scalar mutation results without requiring an entity record', async
   });
   expect(getRequestBody(fetch).query).toContain('endGame(id: "Game-1")');
   expect(getRequestBody(fetch).query).not.toContain('endGame(id: "Game-1") {');
+});
+
+test('selects embedded objects without requesting entity identity fields', async () => {
+  const schema = buildSchema(
+    `type Query { viewer: User } type User { id: ID! character: CharacterImage } type CharacterImage { color: String! url: String! }`,
+  );
+  const fetch = vi.fn(async () =>
+    jsonResponse({
+      data: {
+        f1: {
+          __typename: 'User',
+          character: { color: 'blue', url: '/character.png' },
+          id: 'User-1',
+        },
+      },
+    }),
+  );
+  const transport = createGraphQLTransport({
+    fetch,
+    live: false,
+    roots: { viewer: { type: 'User' } },
+    types: [
+      { fields: { character: { embedded: 'CharacterImage' } }, type: 'User' },
+      { type: 'CharacterImage' },
+    ],
+    url: '/graphql',
+  });
+
+  await expect(
+    transport.fetchQuery?.('viewer', new Set(['character.color', 'character.url'])),
+  ).resolves.toMatchObject({
+    character: { color: 'blue', url: '/character.png' },
+  });
+  const query = getRequestBody(fetch).query;
+  expect(validate(schema, parse(query))).toEqual([]);
+  expect(query).toContain('character { color url }');
 });
 
 test('fetches nodes through the Relay nodes field and decodes global ids', async () => {

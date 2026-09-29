@@ -117,6 +117,8 @@ export type RelationDescriptor =
   | 'scalar'
   /** Field points to a single entity of the given type. */
   | { type: string }
+  /** Field contains an object without entity identity. */
+  | { embedded: string }
   /** Field holds a list of entities of the given type. */
   | { listOf: string };
 

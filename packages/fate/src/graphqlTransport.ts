@@ -350,7 +350,7 @@ const rootArgsToGraphQL = ({
       return !(
         descriptor &&
         typeof descriptor === 'object' &&
-        ('listOf' in descriptor || 'type' in descriptor)
+        ('listOf' in descriptor || 'type' in descriptor || 'embedded' in descriptor)
       );
     }),
   );
@@ -404,9 +404,14 @@ const buildRecordSelection = ({
 }): string => {
   const tree = buildSelectionTree(select);
 
-  const walk = (currentType: string, currentTree: SelectionTree, currentPath: string): string => {
+  const walk = (
+    currentType: string,
+    currentTree: SelectionTree,
+    currentPath: string,
+    embedded = false,
+  ): string => {
     const config = getTypeConfig(types, currentType);
-    const fields = new Set([...currentTree.keys(), 'id', '__typename']);
+    const fields = new Set([...currentTree.keys(), ...(embedded ? [] : ['id', '__typename'])]);
     const lines: Array<string> = [];
 
     for (const field of [...fields].sort()) {
@@ -423,7 +428,9 @@ const buildRecordSelection = ({
         descriptor && typeof descriptor === 'object'
           ? 'type' in descriptor
             ? descriptor.type
-            : descriptor.listOf
+            : 'embedded' in descriptor
+              ? descriptor.embedded
+              : descriptor.listOf
           : undefined;
       const fieldArguments = argumentsForField(
         currentType,
@@ -435,6 +442,13 @@ const buildRecordSelection = ({
       if (descriptor && typeof descriptor === 'object' && 'type' in descriptor) {
         lines.push(
           `${fieldName}${fieldArguments} { ${walk(descriptor.type, childTree, fieldPath)} }`,
+        );
+        continue;
+      }
+
+      if (descriptor && typeof descriptor === 'object' && 'embedded' in descriptor) {
+        lines.push(
+          `${fieldName}${fieldArguments} { ${walk(descriptor.embedded, childTree, fieldPath, true)} }`,
         );
         continue;
       }
@@ -531,10 +545,14 @@ const normalizeGraphQLValue = ({
     }
 
     const descriptor = config?.fields?.[key];
-    if (descriptor && typeof descriptor === 'object' && 'type' in descriptor) {
+    if (
+      descriptor &&
+      typeof descriptor === 'object' &&
+      ('type' in descriptor || 'embedded' in descriptor)
+    ) {
       result[key] = normalizeGraphQLValue({
         decodeNodeId,
-        type: descriptor.type,
+        type: 'type' in descriptor ? descriptor.type : descriptor.embedded,
         types,
         value: entry,
       });
