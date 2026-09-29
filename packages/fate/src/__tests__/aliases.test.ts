@@ -15,8 +15,10 @@ import {
   type ConnectionMetadata,
   type SelectionOf,
   type ViewData,
+  type ViewRef,
 } from '../types.ts';
 import { view } from '../view.ts';
+import { when } from '../when.ts';
 import { memoryStorage } from './persistenceStorage.ts';
 
 type Game = { __typename: 'Game'; id: string; name: string };
@@ -350,4 +352,129 @@ test('restores aliased connection records and pagination from persistence withou
   } finally {
     restored.client.persistence!.dispose();
   }
+});
+
+const GameDetails = view<Game>()({ id: true, name: true });
+const BoundGames = view<User>()(({ status }: { status: string }) => ({
+  games: {
+    args: { first: 1, status },
+    items: { node: GameDetails },
+    pagination: { hasNext: true, nextCursor: true },
+  },
+}));
+const ConditionalGames = view<User>()(({ enabled }: { enabled: boolean }) => ({
+  active: when(enabled, alias(BoundGames({ status: 'Active' }))),
+  lost: alias(BoundGames({ status: 'Lost' })),
+  name: when(enabled, true),
+  waiting: alias(BoundGames({ status: 'Waiting' })),
+}));
+
+test('named fragments carry independent bindings on the same entity through a GraphQL request', async () => {
+  const { client, fetch, games } = setup();
+  const result = await client.request({ viewer: { view: ConditionalGames({ enabled: true }) } });
+  const data = (
+    await client.readView<User, SelectionOf<typeof ConditionalGames>, typeof ConditionalGames>(
+      ConditionalGames,
+      result.viewer!,
+    )
+  ).data;
+  expect(data.active).toMatchObject({ __typename: 'User', id: '1' });
+  const active = (
+    await client.readView<User, SelectionOf<typeof BoundGames>, typeof BoundGames>(
+      BoundGames,
+      data.active!,
+    )
+  ).data;
+  const waiting = (
+    await client.readView<User, SelectionOf<typeof BoundGames>, typeof BoundGames>(
+      BoundGames,
+      data.waiting,
+    )
+  ).data;
+  expect((await client.readView(BoundGames, data.lost)).data).toMatchObject({ games: null });
+  expect((await client.readView(GameDetails, active.games!.items[0].node)).data).toMatchObject({
+    name: 'Active',
+  });
+  expect((await client.readView(GameDetails, waiting.games!.items[0].node)).data).toMatchObject({
+    name: 'Waiting',
+  });
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(games).toHaveBeenCalledTimes(3);
+  await client.loadConnection(
+    GameDetails,
+    (active.games as unknown as { [ConnectionTag]: ConnectionMetadata })[ConnectionTag],
+    { after: '1', first: 1 },
+  );
+  const paged = (
+    await client.readView<User, SelectionOf<typeof BoundGames>, typeof BoundGames>(
+      BoundGames,
+      data.active!,
+    )
+  ).data;
+  expect(paged.games!.items.map(({ node }) => node.id)).toEqual(['Active-1', 'Active-2']);
+  expect(
+    (
+      await client.readView<User, SelectionOf<typeof BoundGames>, typeof BoundGames>(
+        BoundGames,
+        data.waiting,
+      )
+    ).data.games!.items,
+  ).toHaveLength(1);
+});
+
+test('inactive branches stay undefined and have no coverage even when already cached', async () => {
+  const { client, fetch } = setup();
+  await client.request({ viewer: { view: ConditionalGames({ enabled: true }) } });
+  const result = { viewer: client.ref('User', '1', ConditionalGames({ enabled: false })) };
+  const snapshot = await client.readView<
+    User,
+    SelectionOf<typeof ConditionalGames>,
+    typeof ConditionalGames
+  >(ConditionalGames, result.viewer!);
+  expect(snapshot.data.active).toBeUndefined();
+  expect(snapshot.data.name).toBeUndefined();
+  expect(snapshot.data.waiting).toBeDefined();
+  expect(snapshot.coverage.flatMap(([, fields]) => [...fields])).not.toContain('name');
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+test('false conditions remove fields, arguments, and nested named fragments from network planning', async () => {
+  const { client, fetch, games } = setup();
+  const Hidden = view<User>()({
+    name: when(false, true),
+    omitted: when(false, alias(BoundGames({ status: 'Active' }))),
+    present: alias(view<User>()({ inner: alias(BoundGames({ status: 'Waiting' })) })),
+  });
+  const result = await client.request({ viewer: { view: Hidden } });
+  expect(games).toHaveBeenCalledTimes(1);
+  expect(games.mock.calls[0][0].status).toBe('Waiting');
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(getSelectionPlan(Hidden, null).paths).not.toContain('name');
+  expect((await client.readView(Hidden, result.viewer!)).data).toMatchObject({
+    name: undefined,
+    omitted: undefined,
+  });
+});
+
+test('conditional result types preserve booleans, nullability, and named fragment ownership', () => {
+  const Typed = view<User>()({
+    always: when(true, alias(BoundGames({ status: 'Active' }))),
+    maybe: when(Boolean(1), alias(BoundGames({ status: 'Active' }))),
+    name: when(false, true),
+    title: when(Boolean(1), alias('name', true)),
+  });
+  type Data = ViewData<User, SelectionOf<typeof Typed>>;
+  expectTypeOf<Data['always']>().toEqualTypeOf<ViewRef<'User'>>();
+  expectTypeOf<Data['maybe']>().toEqualTypeOf<ViewRef<'User'> | undefined>();
+  expectTypeOf<Data['name']>().toEqualTypeOf<undefined>();
+  expectTypeOf<Data['title']>().toEqualTypeOf<string | undefined>();
+  const checkTypes = () => {
+    // @ts-expect-error A named fragment must select the same entity.
+    view<User>()({ wrong: alias(GameDetails) });
+    // @ts-expect-error Conditions must be booleans.
+    when('yes', true);
+    // @ts-expect-error Conditional fields are still checked.
+    view<User>()({ name: when(true, { missing: true }) });
+  };
+  expect(checkTypes).toBeTypeOf('function');
 });

@@ -1,5 +1,6 @@
-import type { AliasedSelection } from './alias.ts';
+import type { AliasedSelection, AliasedView } from './alias.ts';
 import { FateMutations } from './mutation.ts';
+import type { ConditionalSelection } from './when.ts';
 
 /** Canonical runtime name for an entity type as returned by the server. */
 export type TypeName = string;
@@ -177,7 +178,9 @@ type PlainObjectSelectionField<V> =
       : true;
 
 type PlainObjectSelection<T> = {
-  [K in keyof T]?: PlainObjectSelectionField<T[K]>;
+  [K in keyof T]?:
+    | PlainObjectSelectionField<T[K]>
+    | ConditionalSelection<boolean, PlainObjectSelectionField<T[K]>>;
 } & { readonly [key: string]: unknown };
 
 type ConnectionSelectionBase<T extends Entity> = Readonly<{
@@ -215,7 +218,11 @@ type SelectionFieldValue<T extends Entity, K extends keyof T> =
 
 type DeferrableSelectionFieldValue<T extends Entity, K extends keyof T> =
   | SelectionFieldValue<T, K>
-  | DeferredSelection<SelectionFieldValue<T, K>>;
+  | DeferredSelection<SelectionFieldValue<T, K>>
+  | ConditionalSelection<
+      boolean,
+      SelectionFieldValue<T, K> | DeferredSelection<SelectionFieldValue<T, K>>
+    >;
 
 type SelectionShape<T extends Entity> = {
   [K in keyof T as K extends '__typename' ? never : K]?: DeferrableSelectionFieldValue<T, K>;
@@ -256,20 +263,27 @@ type InvalidSelectionObject<T, S> = S extends object
       ? InvalidSelection<NonNullable<T>, S>
       : 'selection'
   : 'selection';
-type InvalidSelection<T, S> = 0 extends 1 & S
-  ? never
-  : {
-      [K in Exclude<keyof S, SelectionMetadata>]-?: S[K] extends AliasedSelection<
-        infer Field,
-        infer Value
-      >
+type InvalidSelectionEntry<T, K, S> =
+  S extends ConditionalSelection<boolean, infer Value>
+    ? InvalidSelectionEntry<T, K, Value>
+    : S extends AliasedView<infer V>
+      ? T extends ViewEntity<V>
+        ? never
+        : K
+      : S extends AliasedSelection<infer Field, infer Value>
         ? Field extends keyof T
           ? InvalidSelectedValue<T[Field], Value>
           : K
         : K extends keyof T
-          ? InvalidSelectedValue<T[K], S[K]>
+          ? InvalidSelectedValue<T[K], S>
           : K;
-    }[Exclude<keyof S, SelectionMetadata>];
+
+type InvalidSelection<T, S> = 0 extends 1 & S
+  ? never
+  : { [K in Exclude<keyof S, SelectionMetadata>]-?: InvalidSelectionEntry<T, K, S[K]> }[Exclude<
+      keyof S,
+      SelectionMetadata
+    >];
 
 export type ValidateSelection<T extends Entity, S> =
   InvalidSelection<T, S> extends never ? unknown : never;
@@ -351,6 +365,20 @@ type ConnectionMask<T extends Entity, S> = S extends {
 type EntityName<T> = T extends { __typename: infer N extends string } ? N : never;
 
 /** Recursively applies a view selection to an entity to mask fields that aren't selected. */
+type ConditionalMask<C extends boolean, Value> = C extends true ? Value : undefined;
+type MaskSelectionEntry<T, K, S> =
+  S extends ConditionalSelection<infer C, infer Value>
+    ? ConditionalMask<C, MaskSelectionEntry<T, K, Value>>
+    : S extends AliasedView<infer V>
+      ? ViewRef<ViewEntityName<V>>
+      : S extends AliasedSelection<infer Field, infer Value>
+        ? Mask<NonNullish<T>[Extract<Field, keyof T>], Value>
+        : S extends true
+          ? NonNullish<T>[Extract<K, keyof T>]
+          : S extends DeferredSelection<infer Value>
+            ? Deferred<Mask<NonNullish<T>[Extract<K, keyof T>], Value>>
+            : Mask<NonNullish<T>[Extract<K, keyof T>], Extract<S, object>>;
+
 type MaskNonNullish<T, S> =
   T extends Array<infer U extends Entity>
     ? S extends true
@@ -368,16 +396,7 @@ type MaskNonNullish<T, S> =
             ? ViewRef<EntityName<NonNullish<T>>>
             : ViewRef<EntityName<NonNullable<T>>>
           : {
-              [K in keyof S as K extends 'args' ? never : K]: S[K] extends AliasedSelection<
-                infer Field,
-                infer Value
-              >
-                ? Mask<NonNullish<T>[Extract<Field, keyof T>], Value>
-                : S[K] extends true
-                  ? NonNullish<T>[Extract<K, keyof T>]
-                  : S[K] extends DeferredSelection<infer DeferredSelectionValue>
-                    ? Deferred<Mask<NonNullish<T>[Extract<K, keyof T>], DeferredSelectionValue>>
-                    : Mask<NonNullish<T>[Extract<K, keyof T>], Extract<S[K], object>>;
+              [K in keyof S as K extends 'args' ? never : K]: MaskSelectionEntry<T, K, S[K]>;
             } & (T extends Entity ? Pick<NonNullish<T>, '__typename'> : Record<never, never>)
         : T;
 

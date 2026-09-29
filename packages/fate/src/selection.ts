@@ -1,4 +1,4 @@
-import { aliasedField, isAliasedSelection, responseField } from './alias.ts';
+import { aliasedField, isAliasedSelection, isAliasedView, responseField } from './alias.ts';
 import { cloneArgs, hashArgs, paginationArgKeys } from './args.ts';
 import { isDeferredSelection } from './defer.ts';
 import { isRecord } from './record.ts';
@@ -13,6 +13,7 @@ import {
   type View,
 } from './types.ts';
 import { getViewPayloads } from './view.ts';
+import { resolveConditionalSelection } from './when.ts';
 
 type WalkContext = 'default' | 'connection';
 
@@ -58,7 +59,12 @@ export const getSelectionPlan = <T extends Entity, S extends Selection<T>, V ext
     args.set(path, { hash, ignoreKeys, value });
   };
 
-  const walk = (selection: AnyRecord, prefix: string | null, context: WalkContext = 'default') => {
+  const walk = (
+    selection: AnyRecord,
+    prefix: string | null,
+    context: WalkContext = 'default',
+    namespace: ReadonlyArray<string> = [],
+  ) => {
     if (prefix === null && context !== 'connection' && isConnectionSelection(selection)) {
       if (selection.live && isRecord(selection.live)) {
         live.set('', {
@@ -76,13 +82,31 @@ export const getSelectionPlan = <T extends Entity, S extends Selection<T>, V ext
       }
 
       const { args: _args, live: _live, ...withoutArgs } = selection;
-      walk(withoutArgs, prefix, 'connection');
+      walk(withoutArgs, prefix, 'connection', namespace);
       return;
     }
 
-    for (const [key, rawValue] of Object.entries(selection)) {
+    for (const [key, conditionalValue] of Object.entries(selection)) {
+      const rawValue = resolveConditionalSelection(conditionalValue);
+      if (rawValue === undefined) {
+        continue;
+      }
+      if (isAliasedView(rawValue)) {
+        aliasedField(key, key);
+        for (const payload of getViewPayloads(rawValue.view, null)) {
+          walk(payload.select, prefix, context, [...namespace, key]);
+        }
+        continue;
+      }
       const value = isAliasedSelection(rawValue) ? rawValue.selection : rawValue;
-      const field = isAliasedSelection(rawValue) ? aliasedField(key, rawValue.field) : key;
+      const sourceField = isAliasedSelection(rawValue) ? rawValue.field : key;
+      const resultField = isAliasedSelection(rawValue) ? aliasedField(key, sourceField) : key;
+      // Alias the first schema field of each named fragment. Its children share the
+      // usual normalized schema-field/argument keys when the response is written.
+      const field =
+        namespace.length && !isViewTag(key)
+          ? `fate_fragment_${[...namespace, key].map((part) => `${part.length}_${part}`).join('_')}:${sourceField}`
+          : resultField;
       const valueType = typeof value;
       const path = prefix ? `${prefix}.${field}` : field;
 
@@ -121,7 +145,7 @@ export const getSelectionPlan = <T extends Entity, S extends Selection<T>, V ext
 
       if (isViewTag(key)) {
         if (options?.includeNestedViews || !ref || ref[ViewsTag]?.has(key)) {
-          walk((value as { select: AnyRecord }).select, prefix);
+          walk((value as { select: AnyRecord }).select, prefix, context, namespace);
         }
         continue;
       }

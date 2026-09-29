@@ -1,5 +1,5 @@
 import { withAliasSupport } from './alias-transport.ts';
-import { aliasedField, isAliasedSelection, schemaField } from './alias.ts';
+import { aliasedField, isAliasedSelection, isAliasedView, schemaField } from './alias.ts';
 import {
   combineArgsPayload,
   filterConnectionArgs,
@@ -101,6 +101,7 @@ import {
   RootDefinition,
 } from './types.ts';
 import { addViewName, getViewNames, getViewPayloads, resolveView } from './view.ts';
+import { resolveConditionalSelection } from './when.ts';
 
 /**
  * Strategy used when resolving a request.
@@ -3542,7 +3543,23 @@ export class FateClient<
       parentId: EntityId,
       prefix: string | null,
     ) => {
-      for (const [key, rawSelection] of Object.entries(viewPayload)) {
+      for (const [key, conditionalSelection] of Object.entries(viewPayload)) {
+        const rawSelection = resolveConditionalSelection(conditionalSelection);
+        if (rawSelection === undefined) {
+          target[key] = undefined;
+          continue;
+        }
+        if (isAliasedView(rawSelection)) {
+          aliasedField(key, key);
+          const { id, type } = parseEntityId(parentId);
+          const namedRef = this.stableRefWithViewNames(
+            type,
+            (record.id as string | number) ?? id,
+            getViewNames(rawSelection.view),
+          );
+          target[key] = this.cacheOnlyRefs.has(ref) ? this.cacheOnlyResult(namedRef) : namedRef;
+          continue;
+        }
         const selectionKind = isAliasedSelection(rawSelection)
           ? rawSelection.selection
           : rawSelection;

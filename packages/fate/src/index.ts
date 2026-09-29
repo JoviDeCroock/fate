@@ -1,4 +1,4 @@
-export { alias, type AliasedSelection } from './alias.ts';
+export { alias, type AliasedSelection, type AliasedView } from './alias.ts';
 /**
  * The fate core library.
  *
@@ -102,3 +102,5 @@ export type { GraphQLArgumentSchema } from './graphqlSchema.ts';
 export { GraphQLRequestError, type GraphQLErrorPayload } from './graphql-error.ts';
 
 export type { RequestObserver, RequestState, RequestStateOptions } from './request-observer.ts';
+
+export { when, type ConditionalSelection } from './when.ts';
