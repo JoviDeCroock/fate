@@ -1,0 +1,93 @@
+import { expect, test, vi } from 'vite-plus/test';
+import { createClient } from '../client.ts';
+import { clientRoot, clientValueRoot } from '../root.ts';
+import { view } from '../view.ts';
+
+test('publishes new value-query results by identity without inspecting their properties', async () => {
+  const propertyRead = vi.fn(() => 'same');
+  const value = () => Object.defineProperty({}, 'content', { enumerable: true, get: propertyRead });
+  const first = value();
+  const second = value();
+  const fetchQuery = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+  const client = createClient({
+    roots: { value: clientValueRoot<object>() },
+    transport: { fetchById: vi.fn(), fetchQuery },
+    types: [],
+  });
+  const request = { value: { value: true as const } };
+  await client.request(request);
+  const observer = client.observeRequest(request);
+  const initial = observer.getSnapshot();
+  expect(initial.data?.value).toBe(first);
+  await client.request(request, { mode: 'network-only' });
+  const updated = observer.getSnapshot();
+  expect(propertyRead).not.toHaveBeenCalled();
+  expect(updated.data?.value).toBe(second);
+  expect(updated).not.toBe(initial);
+  expect(observer.getSnapshot()).toBe(updated);
+});
+
+test('keeps opaque cyclic values intact in cache-only snapshots', async () => {
+  const value: { self?: unknown } = {};
+  value.self = value;
+  const client = createClient({
+    roots: { value: clientValueRoot<object>() },
+    transport: { fetchById: vi.fn(), fetchQuery: async () => value },
+    types: [],
+  });
+  const request = { value: { value: true as const } };
+  await client.request(request);
+  const observer = client.observeRequest(request, { mode: 'cache-only' });
+  const snapshot = observer.getSnapshot();
+  expect(snapshot.data?.value).toBe(value);
+  expect(observer.getSnapshot()).toBe(snapshot);
+});
+
+test('reuses request containers and only replaces the connection whose list changes', async () => {
+  type User = { __typename: 'User'; id: string; name: string };
+  const UserView = view<User>()({ id: true, name: true });
+  const connection = { items: { node: UserView }, pagination: { hasNext: true as const } };
+  const roots = {
+    users: clientRoot<Array<User>, 'User'>('User'),
+    viewer: clientRoot<User, 'User'>('User'),
+  };
+  const client = createClient<[typeof roots, Record<never, never>]>({
+    roots,
+    transport: {
+      fetchById: async (_type, ids) => ids.map((id) => ({ id, name: 'Ada' })),
+      fetchList: async () => ({
+        items: [{ cursor: 'one', node: { id: '1', name: 'Ada' } }],
+        pagination: { hasNext: false, hasPrevious: false },
+      }),
+    },
+    types: [{ type: 'User' }],
+  });
+  const request = { users: { list: connection }, viewer: { ids: ['1'], view: UserView } };
+  const first = await client.request(request);
+  expect(await client.request(request)).toBe(first);
+  for (const mode of ['cache-first', 'cache-only'] as const) {
+    const observer = client.observeRequest(request, { mode });
+    const listener = vi.fn();
+    const unsubscribe = observer.subscribe(listener);
+    await vi.waitFor(() => expect(observer.getSnapshot().isFetching).toBe(false));
+    const snapshot = observer.getSnapshot();
+    expect(observer.getSnapshot()).toBe(snapshot);
+    listener.mockClear();
+    client.write('User', { id: 'unrelated', name: 'Other' }, new Set(['id', 'name']));
+    await Promise.resolve();
+    expect(observer.getSnapshot()).toBe(snapshot);
+    expect(listener).not.toHaveBeenCalled();
+    const list = client.store.getListState('users')!;
+    client.store.setList('users', {
+      ...list,
+      pagination: { hasPrevious: false, ...list.pagination, hasNext: !list.pagination?.hasNext },
+    });
+    await Promise.resolve();
+    const updated = observer.getSnapshot();
+    expect(updated.data?.users).not.toBe(snapshot.data?.users);
+    expect(updated.data?.viewer).toBe(snapshot.data?.viewer);
+    expect(observer.getSnapshot()).toBe(updated);
+    expect(listener).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  }
+});

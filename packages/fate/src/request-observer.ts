@@ -18,37 +18,6 @@ export type RequestObserver<T> = Readonly<{
   subscribe: (listener: () => void) => () => void;
 }>;
 
-const equalData = (left: unknown, right: unknown): boolean => {
-  if (Object.is(left, right)) {
-    return true;
-  }
-  if (!left || !right || typeof left !== 'object' || typeof right !== 'object') {
-    return false;
-  }
-  if (Array.isArray(left) || Array.isArray(right)) {
-    return (
-      Array.isArray(left) &&
-      Array.isArray(right) &&
-      left.length === right.length &&
-      left.every((value, index) => equalData(value, right[index]))
-    );
-  }
-  if (
-    Object.getPrototypeOf(left) !== Object.prototype ||
-    Object.getPrototypeOf(right) !== Object.prototype
-  ) {
-    return false;
-  }
-  const keys = Reflect.ownKeys(left);
-  return (
-    keys.length === Reflect.ownKeys(right).length &&
-    keys.every(
-      (key) =>
-        Object.hasOwn(right, key) && equalData(Reflect.get(left, key), Reflect.get(right, key)),
-    )
-  );
-};
-
 export const createRequestObserver = <T>({
   options,
   read,
@@ -57,6 +26,7 @@ export const createRequestObserver = <T>({
   subscribe,
 }: {
   options: RequestStateOptions;
+  /** Returns the same result identity until its request data changes. */
   read: () => T | undefined;
   retain: () => { dispose: () => void };
   start: (refresh: boolean) => Promise<T>;
@@ -96,7 +66,7 @@ export const createRequestObserver = <T>({
       snapshot.status === next.status &&
       snapshot.error === requestError &&
       snapshot.isFetching === fetching &&
-      equalData(snapshot.data, data)
+      Object.is(snapshot.data, data)
     ) {
       return snapshot;
     }

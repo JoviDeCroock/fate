@@ -61,6 +61,7 @@ import {
   type QueryRequestDescriptor,
   type ValueRequestDescriptor,
   type RequestDescriptor,
+  type RequestItemDescriptor,
 } from './request-descriptor.ts';
 import {
   createRequestObserver,
@@ -467,6 +468,11 @@ export class FateClient<
   private requestNotificationScheduled = false;
   private readonly cacheOnlyRefs = new WeakSet<object>();
   private readonly cacheOnlyCopies = new WeakMap<object, object>();
+  private readonly requestResults = new WeakMap<RequestDescriptor, AnyRecord>();
+  private readonly requestItemResults = new WeakMap<
+    RequestItemDescriptor,
+    { source: unknown; value: unknown }
+  >();
   private readonly mutationEntities?: ReadonlyMap<string, string>;
   private readonly mutationMap: Record<string, MutationFunction<any>>;
   private readonly parentLists = new Map<
@@ -2206,17 +2212,23 @@ export class FateClient<
     if (!value || typeof value !== 'object') {
       return value;
     }
+    const cached = this.cacheOnlyCopies.get(value);
+    if (cached) {
+      return cached as T;
+    }
     if (ViewsTag in value) {
-      let copy = this.cacheOnlyCopies.get(value);
-      if (!copy) {
-        copy = Object.create(Object.getPrototypeOf(value), Object.getOwnPropertyDescriptors(value));
-        this.cacheOnlyCopies.set(value, copy!);
-        this.cacheOnlyRefs.add(copy!);
-      }
+      const copy = Object.create(
+        Object.getPrototypeOf(value),
+        Object.getOwnPropertyDescriptors(value),
+      );
+      this.cacheOnlyCopies.set(value, copy);
+      this.cacheOnlyRefs.add(copy);
       return copy as T;
     }
     if (Array.isArray(value)) {
-      return value.map((child) => this.cacheOnlyResult(child)) as T;
+      const copy = value.map((child) => this.cacheOnlyResult(child));
+      this.cacheOnlyCopies.set(value, copy);
+      return copy as T;
     }
     if (Object.getPrototypeOf(value) !== Object.prototype) {
       return value;
@@ -2227,7 +2239,25 @@ export class FateClient<
         descriptor.value = this.cacheOnlyResult(descriptor.value);
       }
     }
-    return Object.create(Object.prototype, descriptors);
+    const copy = Object.create(Object.prototype, descriptors);
+    this.cacheOnlyCopies.set(value, copy);
+    return copy;
+  }
+
+  private cacheOnlyRequestResult<T extends AnyRecord>(request: RequestDescriptor, data: T): T {
+    const cached = this.cacheOnlyCopies.get(data);
+    if (cached) {
+      return cached as T;
+    }
+    const copy = Object.fromEntries(
+      request.items.map((item) => [
+        item.name,
+        // Value roots are opaque payloads, not containers of normalized view refs.
+        item.kind === 'value' ? data[item.name] : this.cacheOnlyResult(data[item.name]),
+      ]),
+    );
+    this.cacheOnlyCopies.set(data, copy);
+    return copy as T;
   }
 
   /** Observes complete request results without throwing or suspending on a cache miss. */
@@ -2243,7 +2273,7 @@ export class FateClient<
           return undefined;
         }
         const data = this.getRequestResultFromDescriptor(descriptor) as RequestResult<Roots, R>;
-        return options.mode === 'cache-only' ? this.cacheOnlyResult(data) : data;
+        return options.mode === 'cache-only' ? this.cacheOnlyRequestResult(descriptor, data) : data;
       },
       retain: () => this.retain(request),
       start: (refresh) =>
@@ -2952,58 +2982,63 @@ export class FateClient<
   private getRequestResultFromDescriptor(
     request: RequestDescriptor,
   ): RequestResult<Roots, Request> {
-    const result: AnyRecord = {};
+    const previous = this.requestResults.get(request);
+    let result: AnyRecord = previous ?? {};
     for (const item of request.items) {
-      if (item.kind === 'node') {
-        result[item.name] = this.stableRefWithViewNames(item.type, item.ids[0], item.refViewNames);
-        continue;
-      }
-
-      if (item.kind === 'nodes') {
-        result[item.name] = item.ids.map((id) =>
-          this.stableRefWithViewNames(item.type, id, item.refViewNames),
-        );
-        continue;
-      }
-
-      if (item.kind === 'query') {
-        const entityId = this.rootRequests.get(item.queryKey);
-        if (entityId) {
-          const { id } = parseEntityId(entityId);
-          result[item.name] = this.stableRefWithViewNames(item.type, id, item.refViewNames);
-        } else {
-          result[item.name] = null;
+      const value = this.getRequestItemResult(item);
+      if (!previous || !Object.is(previous[item.name], value)) {
+        if (result === previous) {
+          result = { ...previous };
         }
-        continue;
+        result[item.name] = value;
       }
+    }
+    if (result !== previous) {
+      this.requestResults.set(request, result);
+    }
+    return result as RequestResult<Roots, Request>;
+  }
 
-      if (item.kind === 'value') {
-        result[item.name] = this.rootValues.get(item.queryKey);
-        continue;
-      }
+  private getRequestItemResult(item: RequestItemDescriptor): unknown {
+    if (item.kind === 'node') {
+      return this.stableRefWithViewNames(item.type, item.ids[0], item.refViewNames);
+    }
+    if (item.kind === 'query') {
+      const entityId = this.rootRequests.get(item.queryKey);
+      return entityId
+        ? this.stableRefWithViewNames(item.type, parseEntityId(entityId).id, item.refViewNames)
+        : null;
+    }
+    if (item.kind === 'value') {
+      return this.rootValues.get(item.queryKey);
+    }
+    if (item.kind === 'list' && this.rootValues.has(`list:${item.listKey}`)) {
+      return null;
+    }
 
-      if (item.kind !== 'list') {
-        continue;
-      }
+    const listState = item.kind === 'list' ? this.store.getListState(item.listKey) : undefined;
+    // These containers depend only on immutable descriptor IDs or normalized list
+    // state. Entity field changes are observed by views through their stable refs.
+    const source = item.kind === 'nodes' ? item.ids : listState;
+    const cached = this.requestItemResults.get(item);
+    if (cached && Object.is(cached.source, source)) {
+      return cached.value;
+    }
 
-      if (this.rootValues.has(`list:${item.listKey}`)) {
-        result[item.name] = null;
-        continue;
-      }
-
-      const listState = this.store.getListState(item.listKey);
+    let value: unknown;
+    if (item.kind === 'nodes') {
+      value = item.ids.map((id) => this.stableRefWithViewNames(item.type, id, item.refViewNames));
+    } else if (item.kind === 'list') {
       const entries = getListEntries(listState);
       const nodes = entries.map(({ id }) => {
         const { id: rawId, type } = parseEntityId(id);
         return this.stableRefWithViewNames(type, rawId, item.nodeRefViewNames);
       });
-
       if (item.hasItems) {
         const connection: AnyRecord = {
           items: nodes.map((node, index) => ({ cursor: entries[index]?.cursor, node })),
           pagination: listState?.pagination,
         };
-
         const metadata: ConnectionMetadata = {
           args: item.argsPayload,
           field: item.procedure,
@@ -3014,21 +3049,19 @@ export class FateClient<
           root: true,
           type: item.type,
         };
-
         Object.defineProperty(connection, ConnectionTag, {
           configurable: false,
           enumerable: false,
           value: metadata,
           writable: false,
         });
-
-        result[item.name] = connection;
-        continue;
+        value = connection;
+      } else {
+        value = nodes;
       }
-
-      result[item.name] = nodes;
     }
-    return result as RequestResult<Roots, Request>;
+    this.requestItemResults.set(item, { source, value });
+    return value;
   }
 
   private async fetchByIdAndNormalize(
