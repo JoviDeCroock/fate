@@ -202,3 +202,18 @@ Mounted observers retain their request's records until unmount.
 Outside React, `client.observeRequest(request, options)` exposes `getSnapshot()`
 and `subscribe(listener)`. The first subscriber starts an enabled request;
 unsubscribing releases its retention. Reading a snapshot alone never starts work.
+
+Every request state includes a stable `refetch()` function. It forces a network
+request, returns a promise for the completed result, and rejects with the original
+error on failure. Concurrent calls share pending work. During refresh, complete
+cached data stays available with `status: 'ready'` and `isFetching: true`. A failed
+refresh keeps that data and exposes `error`; the next attempt clears the error.
+`stale-while-revalidate` observers track the entire background request the same
+way, including failures. Disabled and cache-only observers reject explicit
+refetches without fetching; enable the request or change its mode first.
+
+```ts
+const state = useRequestState(request, { mode: 'stale-while-revalidate' });
+// Render state.data, state.isFetching, and state.error independently.
+await state.refetch(); // Also usable from a refresh button or retry action.
+```

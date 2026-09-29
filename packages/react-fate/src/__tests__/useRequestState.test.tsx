@@ -140,3 +140,84 @@ test('notifies cache-only observers about optimistic deletion and rollback', asy
   expect(observer.getSnapshot().status).toBe('ready');
   unsubscribe();
 });
+
+test('awaits refresh completion, keeps usable data, exposes failures, and retries', async () => {
+  const { client, fetchQuery } = setup();
+  await client.request(request);
+  const observer = client.observeRequest(request);
+  const unsubscribe = observer.subscribe(() => {});
+  await vi.waitFor(() => expect(observer.getSnapshot().isFetching).toBe(false));
+  let reject!: (error: Error) => void;
+  fetchQuery.mockImplementationOnce(
+    () =>
+      new Promise((_, fail) => {
+        reject = fail;
+      }),
+  );
+  const refresh = observer.getSnapshot().refetch();
+  const failure = expect(refresh).rejects.toThrow('Offline');
+  await vi.waitFor(() => expect(fetchQuery).toHaveBeenCalledTimes(2));
+  expect(observer.getSnapshot()).toMatchObject({
+    data: { viewer: { id: '1' } },
+    isFetching: true,
+    status: 'ready',
+  });
+  reject(new Error('Offline'));
+  await failure;
+  expect(observer.getSnapshot()).toMatchObject({
+    data: { viewer: { id: '1' } },
+    error: new Error('Offline'),
+    isFetching: false,
+    status: 'ready',
+  });
+  fetchQuery.mockResolvedValueOnce({ id: '1', name: 'Grace' });
+  await observer.getSnapshot().refetch();
+  expect(observer.getSnapshot().error).toBeUndefined();
+  expect((await client.readView(UserView, observer.getSnapshot().data!.viewer)).data).toMatchObject(
+    { name: 'Grace' },
+  );
+  unsubscribe();
+});
+
+test('tracks the complete stale-while-revalidate lifecycle and reports its background error', async () => {
+  const { client, fetchQuery } = setup();
+  await client.request(request);
+  let reject!: (error: Error) => void;
+  fetchQuery.mockImplementationOnce(
+    () =>
+      new Promise((_, fail) => {
+        reject = fail;
+      }),
+  );
+  const observer = client.observeRequest(request, { mode: 'stale-while-revalidate' });
+  const unsubscribe = observer.subscribe(() => {});
+  await vi.waitFor(() => expect(fetchQuery).toHaveBeenCalledTimes(2));
+  expect(observer.getSnapshot()).toMatchObject({
+    data: { viewer: { id: '1' } },
+    isFetching: true,
+    status: 'ready',
+  });
+  reject(new Error('Background failure'));
+  await vi.waitFor(() =>
+    expect(observer.getSnapshot()).toMatchObject({
+      error: new Error('Background failure'),
+      isFetching: false,
+      status: 'ready',
+    }),
+  );
+  unsubscribe();
+});
+
+test('deduplicates concurrent explicit refreshes and refuses network work for disabled or cache-only observers', async () => {
+  const { client, fetchQuery } = setup();
+  const observer = client.observeRequest(request);
+  await observer.getSnapshot().refetch();
+  const count = fetchQuery.mock.calls.length;
+  await Promise.all([observer.getSnapshot().refetch(), observer.getSnapshot().refetch()]);
+  expect(fetchQuery).toHaveBeenCalledTimes(count + 1);
+  for (const options of [{ enabled: false }, { mode: 'cache-only' as const }]) {
+    const passive = client.observeRequest(request, options);
+    await expect(passive.getSnapshot().refetch()).rejects.toThrow(/disabled|cache-only/);
+  }
+  expect(fetchQuery).toHaveBeenCalledTimes(count + 1);
+});

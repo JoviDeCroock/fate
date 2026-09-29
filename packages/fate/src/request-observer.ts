@@ -9,6 +9,7 @@ export type RequestState<T> = Readonly<{
   data: T | undefined;
   error: unknown;
   isFetching: boolean;
+  refetch: () => Promise<T>;
   status: 'disabled' | 'missing' | 'pending' | 'ready' | 'error';
 }>;
 
@@ -58,7 +59,7 @@ export const createRequestObserver = <T>({
   options: RequestStateOptions;
   read: () => T | undefined;
   retain: () => { dispose: () => void };
-  start: () => Promise<T>;
+  start: (refresh: boolean) => Promise<T>;
   subscribe: (listener: () => void) => () => void;
 }): RequestObserver<T> => {
   const enabled = options.enabled !== false;
@@ -68,6 +69,7 @@ export const createRequestObserver = <T>({
   let requestError: unknown;
   let fetching = false;
   let started = false;
+  let inFlight: Promise<T> | undefined;
   let completed = false;
   let unsubscribe: (() => void) | undefined;
   let retained: { dispose: () => void } | undefined;
@@ -78,6 +80,7 @@ export const createRequestObserver = <T>({
       data,
       error: requestError,
       isFetching: fetching,
+      refetch,
       status: !enabled
         ? 'disabled'
         : data !== undefined
@@ -108,6 +111,37 @@ export const createRequestObserver = <T>({
       }
     }
   };
+  const execute = (refresh: boolean): Promise<T> => {
+    if (!enabled || cacheOnly) {
+      return Promise.reject(new Error('fate: Cannot refetch a disabled or cache-only request.'));
+    }
+    if (inFlight) {
+      return inFlight;
+    }
+    started = true;
+    fetching = true;
+    requestError = undefined;
+    inFlight = Promise.resolve()
+      .then(() => start(refresh))
+      .then(
+        (data) => {
+          completed = true;
+          return data;
+        },
+        (error) => {
+          requestError = error;
+          throw error;
+        },
+      )
+      .finally(() => {
+        inFlight = undefined;
+        fetching = false;
+        notify();
+      });
+    notify();
+    return inFlight;
+  };
+  const refetch = () => execute(true);
   return {
     getSnapshot,
     subscribe(listener) {
@@ -116,22 +150,8 @@ export const createRequestObserver = <T>({
         retained = retain();
         unsubscribe = subscribe(notify);
         if (!started && !cacheOnly) {
-          started = true;
-          fetching = true;
-          void Promise.resolve()
-            .then(start)
-            .then(
-              () => {
-                completed = true;
-              },
-              (error) => {
-                requestError = error;
-              },
-            )
-            .finally(() => {
-              fetching = false;
-              notify();
-            });
+          // Automatic work reports failures through the snapshot; explicit refetches reject.
+          void execute(false).catch(() => {});
         }
       }
       return () => {

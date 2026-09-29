@@ -2194,11 +2194,17 @@ export class FateClient<
         return options.mode === 'cache-only' ? this.cacheOnlyResult(data) : data;
       },
       retain: () => this.retain(request),
-      start: () =>
-        this.requestForRender(request, {
-          ...options,
-          mode: options.mode === 'cache-only' ? 'cache-first' : options.mode,
-        }),
+      start: (refresh) =>
+        this.requestWithDescriptor(
+          descriptor,
+          refresh || options.mode === 'stale-while-revalidate'
+            ? 'network-only'
+            : options.mode === 'cache-only'
+              ? 'cache-first'
+              : (options.mode ?? 'cache-first'),
+          { revalidateExisting: true },
+          { persist: options.persist },
+        ),
       subscribe: (listener) => {
         this.requestListeners.add(listener);
         return () => {
