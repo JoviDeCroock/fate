@@ -8,6 +8,8 @@
  */
 
 export {
+  alias,
+  type AliasedSelection,
   clientRoot,
   createClient,
   createGraphQLTransport,

@@ -21,6 +21,7 @@ import { expect, test, vi } from 'vite-plus/test';
 import { createApp, defineComponent, h, nextTick, ref } from 'vue';
 import type { ShallowRef } from 'vue';
 import {
+  alias,
   FateClient,
   useFateClient,
   useListView,
@@ -819,4 +820,36 @@ test('exposes the fate CLI bin from the Vue package', () => {
 
   expect(packageJson.bin).toEqual({ fate: './lib/cli.mjs' });
   expect(packageJson.scripts?.build).toContain('src/cli.ts');
+});
+
+test('supports public aliases in Vue requests and reactive views', async () => {
+  const UserView = view<User>()({ displayName: alias('name', true) });
+  const roots = { viewer: clientRoot<User, 'User'>('User') };
+  const fetchQuery = vi.fn(async () => ({ id: '1', name: 'Ada' }));
+  const client = createClient<[typeof roots, FateMutations]>({
+    roots,
+    transport: { fetchById: vi.fn(), fetchQuery },
+    types: [{ type: 'User' }],
+  });
+  const request = { currentUser: alias('viewer', { view: UserView }) };
+  const Component = defineComponent({
+    setup() {
+      const result = useRequest<typeof request, typeof roots>(request);
+      const user = useView(UserView, () => result.data.value?.currentUser ?? null);
+      return () => h('span', user.value?.displayName ?? 'pending');
+    },
+  });
+  const { app, container } = mount(Component, client);
+  try {
+    await flushAsync();
+    expect(container.textContent).toBe('Ada');
+    expect(fetchQuery).toHaveBeenCalledTimes(1);
+    expect(fetchQuery).toHaveBeenCalledWith('viewer', new Set(['name']), undefined);
+    client.write('User', { id: '1', name: 'Grace' }, new Set(['name']));
+    await flushAsync();
+    expect(container.textContent).toBe('Grace');
+    expect(fetchQuery).toHaveBeenCalledTimes(1);
+  } finally {
+    app.unmount();
+  }
 });
