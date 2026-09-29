@@ -3167,14 +3167,16 @@ export class FateClient<
         item.argsPayload,
       );
       this.assertPersistenceActive();
-      if (!this.acceptWrite(`list:${item.listKey}`, generation)) {
-        return;
-      }
+      const acceptList = this.acceptWrite(`list:${item.listKey}`, generation);
       if (connection === null) {
-        this.rootValues.set(`list:${item.listKey}`, null);
+        if (acceptList) {
+          this.rootValues.set(`list:${item.listKey}`, null);
+        }
         return;
       }
-      this.rootValues.delete(`list:${item.listKey}`);
+      if (acceptList) {
+        this.rootValues.delete(`list:${item.listKey}`);
+      }
       const { items, pagination } = connection;
       this.withWriteGeneration(generation, () =>
         this.store.update(() => {
@@ -3189,6 +3191,9 @@ export class FateClient<
             );
             ids.push(id);
             cursors.push(entry.cursor);
+          }
+          if (!acceptList) {
+            return;
           }
           if (!filterConnectionArgs(item.argsPayload)) {
             this.registerRootList(item.type, item.listKey);
@@ -3267,14 +3272,12 @@ export class FateClient<
           const fieldPath = pathPrefix ? `${pathPrefix}.${key}` : key;
           const fieldArgs = plan?.args.get(fieldPath);
           const storageKey = getFieldKey(fieldPath, plan);
-          if (
-            !Object.hasOwn(record, key) ||
-            !this.acceptWrite(JSON.stringify([entityId, storageKey]), generation)
-          ) {
+          if (!Object.hasOwn(record, key)) {
             continue;
           }
+          const acceptField = this.acceptWrite(JSON.stringify([entityId, storageKey]), generation);
           if (relationDescriptor === 'scalar') {
-            if (!Object.hasOwn(record, key)) {
+            if (!acceptField) {
               continue;
             }
             result[storageKey] = value;
@@ -3285,7 +3288,9 @@ export class FateClient<
           ) {
             const childPaths = selectionTree.get(key) ?? emptySet;
             if (value === null) {
-              result[storageKey] = null;
+              if (acceptField) {
+                result[storageKey] = null;
+              }
               continue;
             }
             if (value && typeof value === 'object' && !isNodeRef(value)) {
@@ -3297,7 +3302,9 @@ export class FateClient<
                 );
               }
               const childId = toEntityId(childType, childConfig.getId(value));
-              result[storageKey] = createNodeRef(childId);
+              if (acceptField) {
+                result[storageKey] = createNodeRef(childId);
+              }
 
               this.writeEntity(childType, value as AnyRecord, childPaths, plan, fieldPath);
             }
@@ -3308,7 +3315,9 @@ export class FateClient<
           ) {
             const childPaths = selectionTree.get(key) ?? emptySet;
             if (value === null) {
-              result[storageKey] = null;
+              if (acceptField) {
+                result[storageKey] = null;
+              }
               continue;
             }
             const childType = relationDescriptor.listOf;
@@ -3396,6 +3405,10 @@ export class FateClient<
                 continue;
               }
 
+              if (!acceptField) {
+                continue;
+              }
+
               const listKey = getListKey(entityId, schemaField(key), fieldArgs?.hash);
               const previousList = this.store.getListState(listKey);
               const argsValue = fieldArgs?.value as AnyRecord | undefined;
@@ -3420,7 +3433,9 @@ export class FateClient<
               this.store.setList(listKey, nextListState);
             }
           } else {
-            result[storageKey] = this.normalizeEmbedded(value, plan, fieldPath);
+            if (acceptField) {
+              result[storageKey] = this.normalizeEmbedded(value, plan, fieldPath);
+            }
           }
         }
       }

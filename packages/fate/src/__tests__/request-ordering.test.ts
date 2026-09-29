@@ -96,6 +96,69 @@ test('orders overlapping by-ID reads independently of the requesting view', asyn
   expect(client.store.read('User:1')).toMatchObject({ bio: 'Bio', name: 'New' });
 });
 
+test('an older relation response fills disjoint child fields without replacing its newer link', async () => {
+  type Person = {
+    __typename: 'User';
+    bio: string;
+    friend: Person | null;
+    id: string;
+    name: string;
+  };
+  const pending: Array<(records: Array<Record<string, unknown>>) => void> = [];
+  const client = createClient({
+    roots: { user: clientRoot<Person, 'User'>('User') },
+    transport: { fetchById: () => new Promise((resolve) => pending.push(resolve)) },
+    types: [{ fields: { friend: { type: 'User' } }, type: 'User' }],
+  });
+  const older = client.request({
+    user: {
+      id: '1',
+      view: view<Person>()({ friend: { bio: true, id: true, name: true }, id: true }),
+    },
+  });
+  const newer = client.request({
+    user: { id: '1', view: view<Person>()({ friend: { id: true, name: true }, id: true }) },
+  });
+  await vi.waitFor(() => expect(pending).toHaveLength(2));
+  pending[1]([{ friend: { id: '2', name: 'New' }, id: '1' }]);
+  await newer;
+  pending[0]([{ friend: { bio: 'Bio', id: '2', name: 'Old' }, id: '1' }]);
+  await older;
+  expect(client.store.read('User:2')).toMatchObject({ bio: 'Bio', name: 'New' });
+});
+
+test('an older root list response fills disjoint item fields without replacing the newer page', async () => {
+  type Connection = {
+    items: Array<{ cursor: string | undefined; node: Record<string, unknown> }>;
+    pagination: { hasNext: boolean; hasPrevious: boolean };
+  };
+  const pending: Array<(connection: Connection) => void> = [];
+  const client = createClient({
+    roots: { users: clientRoot<User, 'User'>('User') },
+    transport: {
+      fetchById: async () => [],
+      fetchList: () => new Promise<Connection>((resolve) => pending.push(resolve)),
+    },
+    types: [{ type: 'User' }],
+  });
+  const older = client.request({
+    users: { args: { first: 1 }, list: { items: { node: Profile } } },
+  });
+  const newer = client.request({ users: { args: { first: 1 }, list: { items: { node: Name } } } });
+  await vi.waitFor(() => expect(pending).toHaveLength(2));
+  pending[1]({
+    items: [{ cursor: undefined, node: { id: '1', name: 'New' } }],
+    pagination: { hasNext: false, hasPrevious: false },
+  });
+  await newer;
+  pending[0]({
+    items: [{ cursor: undefined, node: { bio: 'Bio', id: '1', name: 'Old' } }],
+    pagination: { hasNext: true, hasPrevious: false },
+  });
+  await older;
+  expect(client.store.read('User:1')).toMatchObject({ bio: 'Bio', name: 'New' });
+});
+
 test('late requests do not overwrite optimistic mutations after they commit', async () => {
   const { client, pending, start } = setup();
   client.write('User', { id: '1', name: 'Initial' }, new Set(['id', 'name']));
