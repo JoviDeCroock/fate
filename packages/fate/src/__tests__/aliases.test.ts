@@ -398,6 +398,8 @@ const ConditionalGames = view<User>()(({ enabled }: { enabled: boolean }) => ({
   waiting: alias(BoundGames({ status: 'Waiting' })),
 }));
 
+const conditionalRequest = () => ({ viewer: { view: ConditionalGames({ enabled: true }) } });
+
 test('named fragments carry independent bindings on the same entity through a GraphQL request', async () => {
   const { client, fetch, games } = setup();
   const result = await client.request({ viewer: { view: ConditionalGames({ enabled: true }) } });
@@ -512,9 +514,8 @@ test('restores parameterized named fragments from persistence without fetching i
   const storage = memoryStorage();
   const persistence = () => createPersistence({ key: 'conditional', online: () => false, storage });
   const first = setup(persistence());
-  const request = () => ({ viewer: { view: ConditionalGames({ enabled: true }) } });
   try {
-    await first.client.request(request());
+    await first.client.request(conditionalRequest());
     await first.client.persistence!.flush();
   } finally {
     first.client.persistence!.dispose();
@@ -522,7 +523,7 @@ test('restores parameterized named fragments from persistence without fetching i
   const restored = setup(persistence());
   restored.fetch.mockRejectedValue(new Error('Offline'));
   try {
-    const { viewer } = await restored.client.request(request());
+    const { viewer } = await restored.client.request(conditionalRequest());
     const data = (
       await restored.client.readView<
         User,

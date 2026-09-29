@@ -14,6 +14,24 @@ global.IS_REACT_ACT_ENVIRONMENT = true;
 type User = { __typename: 'User'; id: string; name: string };
 const UserView = view<User>()({ id: true, name: true });
 const request = { viewer: { view: UserView } };
+function Search({ enabled }: { enabled: boolean }) {
+  const result = useRequestState({ viewer: { view: UserView } }, { enabled });
+  return (
+    <span>
+      {result.status}:{result.data?.viewer?.id}
+    </span>
+  );
+}
+
+function Cached() {
+  const result = useRequestState(request, { mode: 'cache-only' });
+  return (
+    <span>
+      {result.status}:{result.data?.viewer === null ? 'null' : result.data?.viewer?.id}
+    </span>
+  );
+}
+
 const setup = () => {
   const fetchQuery = vi.fn(async () => ({ id: '1', name: 'Ada' }));
   const client = createClient({
@@ -28,14 +46,6 @@ test('does not fetch disabled requests and starts when enabled with stable inlin
   const { client, fetchQuery } = setup();
   const element = document.createElement('div');
   const root = createRoot(element);
-  function Search({ enabled }: { enabled: boolean }) {
-    const result = useRequestState({ viewer: { view: UserView } }, { enabled });
-    return (
-      <span>
-        {result.status}:{result.data?.viewer?.id}
-      </span>
-    );
-  }
   const render = (enabled: boolean) =>
     act(async () =>
       root.render(
@@ -58,14 +68,6 @@ test('observes a cache-only miss becoming a complete nullable result without fet
   const { client, fetchQuery } = setup();
   const element = document.createElement('div');
   const root = createRoot(element);
-  function Cached() {
-    const result = useRequestState(request, { mode: 'cache-only' });
-    return (
-      <span>
-        {result.status}:{result.data?.viewer === null ? 'null' : result.data?.viewer?.id}
-      </span>
-    );
-  }
   await act(async () =>
     root.render(
       <FateClient client={client}>

@@ -11,30 +11,30 @@
   },
   "dependencies": {
     "@nkzw/stack": "^2.3.2",
-    "@paper-design/shaders": "0.0.80",
-    "@void/react": "^0.20.1",
+    "@paper-design/shaders": "0.0.81",
+    "@void/react": "^0.21.2",
     "clsx": "^2.1.1",
     "react": "catalog:",
     "react-dom": "catalog:",
     "tailwind-merge": "^3.7.0",
-    "void": "^0.20.1"
+    "void": "^0.21.2"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "5.20260917.1",
+    "@cloudflare/workers-types": "5.20260928.1",
     "@hono/node-server": "^2.1.1",
     "@nkzw/eslint-plugin": "^2.0.0",
     "@nkzw/oxlint-config": "^2.0.1",
     "@tailwindcss/vite": "^4.3.3",
-    "@types/node": "^26.6.1",
+    "@types/node": "^26.6.3",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "^6.1.1",
-    "oxc-transform-react": "^0.150.0",
+    "oxc-transform-react": "^0.151.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
     "vite": "catalog:",
     "vite-plus": "catalog:",
-    "wrangler": "4.133.0"
+    "wrangler": "4.142.0"
   },
   "engines": {
     "node": ">=24.0.0"

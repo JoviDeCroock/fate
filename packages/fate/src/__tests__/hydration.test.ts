@@ -45,6 +45,9 @@ const types = [
   { type: 'Comment' },
 ] as const;
 
+const createHydrationClient = () =>
+  createClient({ roots: {}, transport: { fetchById: vi.fn() }, types });
+
 const createMetadataClient = () =>
   createClient({
     roots: {},
@@ -164,13 +167,7 @@ test('hydrates root queries, nullable queries, and paginated root lists', async 
 
 test('preserves existing browser fields by default and supports authoritative replacement', () => {
   const PostView = view<Post>()({ content: true, id: true, title: true });
-  const create = () =>
-    createClient({
-      roots: {},
-      transport: { fetchById: vi.fn() },
-      types,
-    });
-  const server = create();
+  const server = createHydrationClient();
   server.write(
     'Post',
     { __typename: 'Post', content: 'Server content', id: 'post-1', title: 'Server title' },
@@ -178,7 +175,7 @@ test('preserves existing browser fields by default and supports authoritative re
   );
   const state = server.dehydrate();
 
-  const browser = create();
+  const browser = createHydrationClient();
   browser.write(
     'Post',
     { __typename: 'Post', id: 'post-1', title: 'Browser title' },
@@ -341,9 +338,8 @@ test('hydrates list windows and root-list registrations used by mutation inserti
 });
 
 test('replaying replacement hydration is idempotent and only notifies durable changes', () => {
-  const create = () => createClient({ roots: {}, transport: { fetchById: vi.fn() }, types });
-  const server = create();
-  const browser = create();
+  const server = createHydrationClient();
+  const browser = createHydrationClient();
   const postId = toEntityId('Post', 'post-1');
   const listKey = getListKey(postId, 'comments');
   const recordSubscriber = vi.fn();

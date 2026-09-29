@@ -13,12 +13,15 @@ const root = process.cwd();
 
 const packages = [
   {
-    api: 'docs/api/@nkzw/fate',
+    api: [
+      { index: 'fate/src/index.md', path: 'fate', title: 'Client' },
+      { index: '@nkzw/fate/server/index.md', path: '@nkzw/fate', title: 'Server' },
+    ],
     name: '@nkzw/fate',
     target: 'packages/fate/docs',
   },
   {
-    api: 'docs/api/react-fate',
+    api: [{ index: 'react-fate/src/index.md', path: 'react-fate', title: 'React' }],
     name: 'react-fate',
     target: 'packages/react-fate/docs',
   },
@@ -61,21 +64,30 @@ const rewriteDocsLinks = (targetRoot: string, directory = targetRoot) => {
 };
 
 for (const packageDocs of packages) {
-  const apiSource = join(root, packageDocs.api);
   const guideSource = join(root, 'docs/guide');
   const integrationsSource = join(root, 'docs/integrations');
   const target = join(root, packageDocs.target);
 
-  assertDirectory(apiSource);
+  for (const api of packageDocs.api) {
+    assertDirectory(join(root, 'docs/api', api.path));
+  }
   assertDirectory(guideSource);
   assertDirectory(integrationsSource);
 
   rmSync(target, { force: true, recursive: true });
   mkdirSync(target, { recursive: true });
 
-  cpSync(apiSource, join(target, 'api'), { recursive: true });
+  for (const api of packageDocs.api) {
+    cpSync(join(root, 'docs/api', api.path), join(target, 'api', api.path), {
+      recursive: true,
+    });
+  }
   cpSync(guideSource, join(target, 'guide'), { recursive: true });
   cpSync(integrationsSource, join(target, 'integrations'), { recursive: true });
+  writeFileSync(
+    join(target, 'api/index.md'),
+    `# ${packageDocs.name} API\n\n${packageDocs.api.map(({ index, title }) => `- [${title}](${index})`).join('\n')}\n`,
+  );
   rewriteDocsLinks(target);
 
   writeFileSync(

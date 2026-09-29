@@ -36,6 +36,13 @@ const moduleExports = {
   Root: { optionalMap: mapDataView, selectedMap: mapDataView, viewer: mapDataView },
 };
 
+const generate = (fateGraphQL: object) =>
+  createClientSource({
+    moduleExports: { ...moduleExports, fateGraphQL },
+    moduleName: './contract.ts',
+    transport: 'graphql',
+  });
+
 test('extracts input defaults and custom root names from SDL and schema objects', () => {
   const metadata = createGraphQLArgumentSchema(schema);
   expect(metadata).toEqual(createGraphQLArgumentSchema(buildSchema(schema)));
@@ -87,12 +94,6 @@ test('explains undeclared SDL directives without relaxing schema validation', ()
 });
 
 test('rejects schema mappings with unknown fields or mutation inputs during generation', () => {
-  const generate = (fateGraphQL: object) =>
-    createClientSource({
-      moduleExports: { ...moduleExports, fateGraphQL },
-      moduleName: './contract.ts',
-      transport: 'graphql',
-    });
   expect(() =>
     generate({ ...moduleExports.fateGraphQL, roots: { selectedMap: { field: 'typo' } } }),
   ).toThrow(/Unknown query field/);

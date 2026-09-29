@@ -403,6 +403,11 @@ export function createHTTPTransport<
 
   if (liveEnabled) {
     const liveSubscriptions = new Map<string, LiveSubscription>();
+    const reportError = (error: Error | Event) => {
+      for (const subscription of new Set(liveSubscriptions.values())) {
+        reportSubscriptionError(subscription, error);
+      }
+    };
     let liveClient: LiveConnectorClient | undefined;
     let nativeLiveClient:
       | {
@@ -491,12 +496,6 @@ export function createHTTPTransport<
       ): Operation => {
         const lastEventId = lastEventIds.get(operation.id);
         return lastEventId ? { ...operation, lastEventId } : operation;
-      };
-
-      const reportError = (error: Error | Event) => {
-        for (const subscription of new Set(liveSubscriptions.values())) {
-          reportSubscriptionError(subscription, error);
-        }
       };
 
       source.addEventListener('open', () => {

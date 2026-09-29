@@ -10,26 +10,25 @@ const ensureSerializable = (value: unknown, path: string) => {
   }
 };
 
-export const cloneArgs = (value: AnyRecord, path: string): AnyRecord => {
-  const cloneValue = (entry: unknown, currentPath: string): unknown => {
-    if (Array.isArray(entry)) {
-      return entry.map((item, index) => cloneValue(item, `${currentPath}[${index}]`));
+const cloneValue = (entry: unknown, currentPath: string): unknown => {
+  if (Array.isArray(entry)) {
+    return entry.map((item, index) => cloneValue(item, `${currentPath}[${index}]`));
+  }
+
+  if (isRecord(entry)) {
+    const result: AnyRecord = {};
+    for (const [key, child] of Object.entries(entry)) {
+      result[key] = cloneValue(child, `${currentPath}.${key}`);
     }
+    return result;
+  }
 
-    if (isRecord(entry)) {
-      const result: AnyRecord = {};
-      for (const [key, child] of Object.entries(entry)) {
-        result[key] = cloneValue(child, `${currentPath}.${key}`);
-      }
-      return result;
-    }
-
-    ensureSerializable(entry, currentPath);
-    return entry;
-  };
-
-  return cloneValue(value, path) as AnyRecord;
+  ensureSerializable(entry, currentPath);
+  return entry;
 };
+
+export const cloneArgs = (value: AnyRecord, path: string): AnyRecord =>
+  cloneValue(value, path) as AnyRecord;
 
 export const paginationArgKeys = new Set(['after', 'before', 'cursor', 'first', 'last']);
 

@@ -114,6 +114,23 @@ const merge = (left: unknown, right: unknown): unknown => {
   return right;
 };
 
+const readAliases = (
+  select: Iterable<string>,
+  args: AnyRecord | undefined,
+  fetch: (select: Set<string>, args?: AnyRecord) => Promise<unknown>,
+) => {
+  const paths = new Set(select);
+  if (![...paths].some((path) => path.includes(':'))) {
+    return fetch(paths, args);
+  }
+  const groups = groupsFor(paths);
+  return Promise.all(
+    groups.map(async (group) =>
+      project(await fetch(group.paths, scopedArgs(args, group)), group.tree),
+    ),
+  ).then((values) => values.reduce(merge));
+};
+
 /** Lower read aliases for existing native/custom transports without changing their protocol. */
 export const withAliasSupport = <M extends Record<string, MutationShape>>(
   transport: Transport<M>,
@@ -121,22 +138,6 @@ export const withAliasSupport = <M extends Record<string, MutationShape>>(
   if (transport.supportsAliases) {
     return transport;
   }
-  const read = (
-    select: Iterable<string>,
-    args: AnyRecord | undefined,
-    fetch: (select: Set<string>, args?: AnyRecord) => Promise<unknown>,
-  ) => {
-    const paths = new Set(select);
-    if (![...paths].some((path) => path.includes(':'))) {
-      return fetch(paths, args);
-    }
-    const groups = groupsFor(paths);
-    return Promise.all(
-      groups.map(async (group) =>
-        project(await fetch(group.paths, scopedArgs(args, group)), group.tree),
-      ),
-    ).then((values) => values.reduce(merge));
-  };
   const mutation = (
     select: Set<string>,
     input: unknown,
@@ -166,18 +167,18 @@ export const withAliasSupport = <M extends Record<string, MutationShape>>(
   return {
     ...transport,
     fetchById: (type, ids, select, args) =>
-      read(select, args, (fields, scoped) =>
+      readAliases(select, args, (fields, scoped) =>
         transport.fetchById(type, ids, fields, scoped),
       ) as ReturnType<Transport<M>['fetchById']>,
     fetchList: transport.fetchList
       ? (name, select, args) =>
-          read(select, args, (fields, scoped) =>
+          readAliases(select, args, (fields, scoped) =>
             transport.fetchList!(name, fields, scoped),
           ) as ReturnType<NonNullable<Transport<M>['fetchList']>>
       : undefined,
     fetchQuery: transport.fetchQuery
       ? (name, select, args) =>
-          read(select, args, (fields, scoped) => transport.fetchQuery!(name, fields, scoped))
+          readAliases(select, args, (fields, scoped) => transport.fetchQuery!(name, fields, scoped))
       : undefined,
     mutate: transport.mutate
       ? (name, input, select, selectionArgs) =>
