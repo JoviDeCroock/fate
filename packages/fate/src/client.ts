@@ -1,3 +1,5 @@
+import { withAliasSupport } from './alias-transport.ts';
+import { aliasedField, isAliasedSelection, schemaField } from './alias.ts';
 import {
   combineArgsPayload,
   filterConnectionArgs,
@@ -12,7 +14,7 @@ import {
   getDeferredSelection,
   isDeferredSelection,
 } from './defer.ts';
-import { getFieldKey, getStoragePath } from './field-key.ts';
+import { argumentFieldKey, getFieldKey, getStoragePath } from './field-key.ts';
 import {
   decodeClientHydrationState,
   encodeHydrationValue,
@@ -563,7 +565,7 @@ export class FateClient<
     }
     this.hydrationScope = hydrationScope as HydrationScope;
     this.roots = options.roots;
-    this.transport = options.transport;
+    this.transport = withAliasSupport(options.transport);
     this.types = new Map(options.types.map((entity) => [entity.type, { getId, ...entity }]));
 
     if (options.mutations) {
@@ -1783,8 +1785,8 @@ export class FateClient<
     }
 
     const owner = this.store.read(connection.owner);
-    const current = Array.isArray(owner?.[connection.field])
-      ? (owner?.[connection.field] as Array<unknown>)
+    const current = Array.isArray(owner?.[argumentFieldKey(connection.field, connection.hash)])
+      ? (owner?.[argumentFieldKey(connection.field, connection.hash)] as Array<unknown>)
       : [];
     const currentIds = current
       .map((item) => (isNodeRef(item) ? getNodeRefId(item) : null))
@@ -1830,8 +1832,13 @@ export class FateClient<
     this.viewDataCache.invalidate(connection.owner);
     this.store.merge(
       connection.owner,
-      { [connection.field]: createNodeRefsForIds(nextIds, current) },
-      [connection.field],
+      {
+        [argumentFieldKey(connection.field, connection.hash)]: createNodeRefsForIds(
+          nextIds,
+          current,
+        ),
+      },
+      [argumentFieldKey(connection.field, connection.hash)],
     );
   }
 
@@ -2153,15 +2160,21 @@ export class FateClient<
       this.store.setList(connection.key, nextListState);
 
       const current = this.store.read(connection.owner);
-      const existingField = Array.isArray(current?.[connection.field])
-        ? (current?.[connection.field] as Array<unknown>) || []
+      const existingField = Array.isArray(
+        current?.[argumentFieldKey(connection.field, connection.hash)],
+      )
+        ? (current?.[argumentFieldKey(connection.field, connection.hash)] as Array<unknown>) || []
         : [];
       const nodeRefs = createNodeRefsForIds(newIds, undefined);
       const nextField =
         direction === 'forward' ? [...existingField, ...nodeRefs] : [...nodeRefs, ...existingField];
 
       this.viewDataCache.invalidate(connection.owner);
-      this.store.merge(connection.owner, { [connection.field]: nextField }, [connection.field]);
+      this.store.merge(
+        connection.owner,
+        { [argumentFieldKey(connection.field, connection.hash)]: nextField },
+        [argumentFieldKey(connection.field, connection.hash)],
+      );
     });
     return this.store.getListState(connection.key);
   }
@@ -2729,9 +2742,6 @@ export class FateClient<
     paths: Iterable<string>,
     plan: SelectionPlan,
   ): Set<string> {
-    if (!plan.args.size) {
-      return this.store.missingForSelection(entityId, paths);
-    }
     const storagePaths = new Map([...paths].map((path) => [getStoragePath(path, plan), path]));
     return new Set(
       [...this.store.missingForSelection(entityId, storagePaths.keys())].map((path) =>
@@ -2996,11 +3006,11 @@ export class FateClient<
 
         const metadata: ConnectionMetadata = {
           args: item.argsPayload,
-          field: item.name,
+          field: item.procedure,
           key: item.listKey,
           live: item.plan.live.get(''),
           owner: item.name,
-          procedure: item.name,
+          procedure: item.procedure,
           root: true,
           type: item.type,
         };
@@ -3050,7 +3060,11 @@ export class FateClient<
 
     const generation = ++this.writeGeneration;
     await this.trackPendingRequest(async () => {
-      const record = await this.transport.fetchQuery!(item.name, item.plan.paths, item.argsPayload);
+      const record = await this.transport.fetchQuery!(
+        item.procedure,
+        item.plan.paths,
+        item.argsPayload,
+      );
       this.assertPersistenceActive();
       if (!record || typeof record !== 'object') {
         if (this.acceptWrite(`root:${item.queryKey}`, generation)) {
@@ -3074,7 +3088,11 @@ export class FateClient<
     }
     const generation = ++this.writeGeneration;
     await this.trackPendingRequest(async () => {
-      const value = await this.transport.fetchQuery!(item.name, item.plan.paths, item.argsPayload);
+      const value = await this.transport.fetchQuery!(
+        item.procedure,
+        item.plan.paths,
+        item.argsPayload,
+      );
       this.assertPersistenceActive();
       if (this.acceptWrite(`root:${item.queryKey}`, generation)) {
         this.rootValues.set(item.queryKey, value);
@@ -3092,7 +3110,7 @@ export class FateClient<
     const generation = ++this.writeGeneration;
     await this.trackPendingRequest(async () => {
       const connection = await this.transport.fetchList!(
-        item.name,
+        item.procedure,
         item.plan.paths,
         item.argsPayload,
       );
@@ -3137,6 +3155,28 @@ export class FateClient<
     });
   }
 
+  private normalizeEmbedded(
+    value: unknown,
+    plan: SelectionPlan | undefined,
+    prefix: string,
+  ): unknown {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.normalizeEmbedded(item, plan, prefix));
+    }
+    if (
+      !isRecord(value) ||
+      ![...(plan?.paths ?? [])].some((path) => path.startsWith(`${prefix}.`))
+    ) {
+      return value;
+    }
+    return Object.fromEntries(
+      Object.entries(value).map(([key, child]) => {
+        const path = `${prefix}.${key}`;
+        return [getFieldKey(path, plan), this.normalizeEmbedded(child, plan, path)];
+      }),
+    );
+  }
+
   private writeEntity(
     type: string,
     record: AnyRecord,
@@ -3163,8 +3203,14 @@ export class FateClient<
       const result: AnyRecord = {};
       const selectionTree = groupSelectionByPrefix(select);
 
+      const fields = Object.fromEntries(
+        Object.keys(record).map((key) => [key, config.fields?.[schemaField(key)]]),
+      );
       if (config.fields) {
-        for (const [key, relationDescriptor] of Object.entries(config.fields)) {
+        for (const [key, relationDescriptor] of Object.entries(fields)) {
+          if (!relationDescriptor) {
+            continue;
+          }
           const value = record[key];
           const fieldPath = pathPrefix ? `${pathPrefix}.${key}` : key;
           const fieldArgs = plan?.args.get(fieldPath);
@@ -3298,7 +3344,7 @@ export class FateClient<
                 continue;
               }
 
-              const listKey = getListKey(entityId, key, fieldArgs?.hash);
+              const listKey = getListKey(entityId, schemaField(key), fieldArgs?.hash);
               const previousList = this.store.getListState(listKey);
               const argsValue = fieldArgs?.value as AnyRecord | undefined;
 
@@ -3322,13 +3368,13 @@ export class FateClient<
               this.store.setList(listKey, nextListState);
             }
           } else {
-            result[storageKey] = value;
+            result[storageKey] = this.normalizeEmbedded(value, plan, fieldPath);
           }
         }
       }
 
       for (const [key, value] of Object.entries(record)) {
-        if (!(key in (config.fields ?? {}))) {
+        if (!fields[key]) {
           const fieldPath = pathPrefix ? `${pathPrefix}.${key}` : key;
           const storageKey = getFieldKey(fieldPath, plan);
           if (this.acceptWrite(JSON.stringify([entityId, storageKey]), generation)) {
@@ -3460,7 +3506,12 @@ export class FateClient<
       parentId: EntityId,
       prefix: string | null,
     ) => {
-      for (const [key, selectionKind] of Object.entries(viewPayload)) {
+      for (const [key, rawSelection] of Object.entries(viewPayload)) {
+        const selectionKind = isAliasedSelection(rawSelection)
+          ? rawSelection.selection
+          : rawSelection;
+        const field = isAliasedSelection(rawSelection) ? rawSelection.field : key;
+        const pathField = isAliasedSelection(rawSelection) ? aliasedField(key, field) : key;
         if (isViewTag(key)) {
           if (!target[ViewsTag]) {
             assignViewTag(target, new Set());
@@ -3470,13 +3521,13 @@ export class FateClient<
           continue;
         }
 
-        const fieldPath = prefix ? `${prefix}.${key}` : key;
+        const fieldPath = prefix ? `${prefix}.${pathField}` : pathField;
         const storageKey = getFieldKey(fieldPath, plan);
         if (isDeferredSelection(selectionKind)) {
           const { id, type } = parseEntityId(parentId);
           coverageById.set(parentId, (coverageById.get(parentId) ?? new Set()).add(storageKey));
           target[key] = createDeferred({
-            field: key,
+            field,
             id,
             owner: parentId,
             selection: getDeferredSelection(selectionKind),
@@ -3522,7 +3573,7 @@ export class FateClient<
             if (nextSelection.items && typeof nextSelection.items === 'object') {
               const selection = nextSelection.items as AnyRecord;
               const fieldArgs = plan.args.get(fieldPath);
-              const listKey = getListKey(parentId, key, fieldArgs?.hash);
+              const listKey = getListKey(parentId, field, fieldArgs?.hash);
               const listState = this.store.getListState(listKey);
               const entries = listState
                 ? getListEntries(listState)
@@ -3590,15 +3641,15 @@ export class FateClient<
               }
               const { type: parentType } = parseEntityId(parentId);
               if (parentType) {
-                const childType = this.getListNodeType(parentType, key);
+                const childType = this.getListNodeType(parentType, field);
                 const metadata: ConnectionMetadata = {
                   args: fieldArgs?.value ? { ...fieldArgs.value } : undefined,
-                  field: key,
+                  field,
                   hash: fieldArgs?.hash,
                   key: listKey,
                   live: plan.live.get(fieldPath),
                   owner: parentId,
-                  procedure: `${parentType}.${key}`,
+                  procedure: `${parentType}.${field}`,
                   root: false,
                   type: childType,
                 };

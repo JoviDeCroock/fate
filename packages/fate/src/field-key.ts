@@ -1,18 +1,15 @@
+import { schemaField } from './alias.ts';
 import type { SelectionPlan } from './selection.ts';
 
-export const getFieldKey = (path: string, plan?: SelectionPlan): string => {
-  const field = path.slice(path.lastIndexOf('.') + 1);
-  const args = plan?.args.get(path);
-  // Connections already keep argument-specific list state independently of the owner field.
-  return args && !args.ignoreKeys && Object.keys(args.value).length
-    ? `${field}(${encodeURIComponent(args.hash).replaceAll('.', '%2E')})`
+export const argumentFieldKey = (field: string, hash?: string): string =>
+  hash && hash !== 'object:{}'
+    ? `${field}(${encodeURIComponent(hash).replaceAll('.', '%2E')})`
     : field;
-};
+
+export const getFieldKey = (path: string, plan?: SelectionPlan): string =>
+  argumentFieldKey(schemaField(path.slice(path.lastIndexOf('.') + 1)), plan?.args.get(path)?.hash);
 
 export const getStoragePath = (path: string, plan?: SelectionPlan, prefix = ''): string => {
-  if (!plan?.args.size) {
-    return path;
-  }
   let current = prefix;
   return path
     .split('.')

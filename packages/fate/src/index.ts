@@ -1,3 +1,4 @@
+export { alias, type AliasedSelection } from './alias.ts';
 /**
  * The fate core library.
  *

@@ -1,3 +1,4 @@
+import { aliasedField, isAliasedSelection, responseField } from './alias.ts';
 import { cloneArgs, hashArgs, paginationArgKeys } from './args.ts';
 import { isDeferredSelection } from './defer.ts';
 import { isRecord } from './record.ts';
@@ -46,8 +47,13 @@ export const getSelectionPlan = <T extends Entity, S extends Selection<T>, V ext
   >();
   const live = new Map<string, ConnectionLivePolicy>();
   const paths = new Set<string>();
+  const responsePaths = new Map<string, string>();
 
   const assignArgs = (path: string, value: AnyRecord, ignoreKeys?: ReadonlySet<string>) => {
+    const previous = args.get(path);
+    if (previous && hashArgs(previous.value) !== hashArgs(value)) {
+      throw new Error(`fate: Conflicting arguments for '${path}'. Use distinct aliases.`);
+    }
     const hash = hashArgs(value, { ignoreKeys });
     args.set(path, { hash, ignoreKeys, value });
   };
@@ -74,9 +80,11 @@ export const getSelectionPlan = <T extends Entity, S extends Selection<T>, V ext
       return;
     }
 
-    for (const [key, value] of Object.entries(selection)) {
+    for (const [key, rawValue] of Object.entries(selection)) {
+      const value = isAliasedSelection(rawValue) ? rawValue.selection : rawValue;
+      const field = isAliasedSelection(rawValue) ? aliasedField(key, rawValue.field) : key;
       const valueType = typeof value;
-      const path = prefix ? `${prefix}.${key}` : key;
+      const path = prefix ? `${prefix}.${field}` : field;
 
       if (context === 'connection') {
         if (key === 'args' || key === 'live' || key === 'pagination') {
@@ -89,6 +97,15 @@ export const getSelectionPlan = <T extends Entity, S extends Selection<T>, V ext
           }
           continue;
         }
+      }
+
+      if (!isViewTag(key) && !isDeferredSelection(value)) {
+        const responsePath = path.split('.').map(responseField).join('.');
+        const previous = responsePaths.get(responsePath);
+        if (previous && previous !== path) {
+          throw new Error(`fate: Conflicting alias selections for '${responsePath}'.`);
+        }
+        responsePaths.set(responsePath, path);
       }
 
       if (valueType === 'boolean') {

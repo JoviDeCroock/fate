@@ -1,3 +1,4 @@
+import { schemaField } from './alias.ts';
 import { filterConnectionArgs } from './args.ts';
 import type { FateClient } from './client.ts';
 import { getFieldKey, getStoragePath } from './field-key.ts';
@@ -844,7 +845,7 @@ export class PersistenceCache {
         const storageKey = getFieldKey(childPrefix, plan);
         const value = record.record[storageKey];
         if (Array.isArray(value)) {
-          const nestedKey = getListKey(id, field, plan.args.get(childPrefix)?.hash);
+          const nestedKey = getListKey(id, schemaField(field), plan.args.get(childPrefix)?.hash);
           const list = (await readNode(listKey(nestedKey))) as List | undefined;
           if (list) {
             const node = nodes.get(key)!;

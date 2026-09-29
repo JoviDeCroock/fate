@@ -1,3 +1,5 @@
+import { withAliasSupport } from './alias-transport.ts';
+import { responseField, schemaField } from './alias.ts';
 import { GraphQLRequestError, type GraphQLErrorPayload } from './graphql-error.ts';
 import {
   graphQLOutputRelations,
@@ -362,7 +364,7 @@ const rootArgsToGraphQL = ({
   const fields = getTypeConfig(types, type).fields ?? {};
   const rootArgs = Object.fromEntries(
     Object.entries(args ?? {}).filter(([key]) => {
-      const descriptor = fields[key];
+      const descriptor = fields[schemaField(key)];
       return !(
         descriptor &&
         typeof descriptor === 'object' &&
@@ -439,9 +441,12 @@ const buildRecordSelection = ({
       }
 
       const childTree = currentTree.get(field) ?? new Map();
-      const descriptor = config.fields?.[field];
+      const sourceField = schemaField(field);
+      const descriptor = config.fields?.[sourceField];
       const fieldPath = currentPath ? `${currentPath}.${field}` : field;
-      const fieldName = assertIdentifier(field, 'field');
+      const fieldName = field.includes(':')
+        ? `${assertIdentifier(responseField(field), 'alias')}: ${assertIdentifier(sourceField, 'field')}`
+        : assertIdentifier(field, 'field');
       const resultType =
         descriptor && typeof descriptor === 'object'
           ? 'type' in descriptor
@@ -452,7 +457,7 @@ const buildRecordSelection = ({
           : undefined;
       const fieldArguments = argumentsForField(
         currentType,
-        field,
+        sourceField,
         getArgsAtPath(args, fieldPath),
         resultType,
       );
@@ -527,17 +532,21 @@ const relayToFateConnection = (value: unknown) => {
 
 const normalizeGraphQLValue = ({
   decodeNodeId,
+  selection,
   type,
   types,
   value,
 }: {
   decodeNodeId: (type: string, id: string | number) => string | number;
+  selection?: SelectionTree;
   type?: string;
   types: ReadonlyMap<string, TypeConfig>;
   value: unknown;
 }): unknown => {
   if (Array.isArray(value)) {
-    return value.map((entry) => normalizeGraphQLValue({ decodeNodeId, types, value: entry }));
+    return value.map((entry) =>
+      normalizeGraphQLValue({ decodeNodeId, selection, type, types, value: entry }),
+    );
   }
 
   const connection = relayToFateConnection(value);
@@ -550,7 +559,7 @@ const normalizeGraphQLValue = ({
       ...connectionRecord,
       items: connectionRecord.items.map((entry) => ({
         ...entry,
-        node: normalizeGraphQLValue({ decodeNodeId, types, value: entry.node }),
+        node: normalizeGraphQLValue({ decodeNodeId, selection, type, types, value: entry.node }),
       })),
     };
   }
@@ -563,13 +572,21 @@ const normalizeGraphQLValue = ({
   const config = typename ? types.get(typename) : undefined;
   const result: AnyRecord = {};
 
-  for (const [key, entry] of Object.entries(value)) {
-    if (key === 'id' && typename && (typeof entry === 'string' || typeof entry === 'number')) {
-      result.id = decodeNodeId(typename, entry);
+  for (const [responseKey, entry] of Object.entries(value)) {
+    const key =
+      [...(selection?.keys() ?? [])].find((field) => responseField(field) === responseKey) ??
+      responseKey;
+    const childSelection = selection?.get(key);
+    if (
+      schemaField(key) === 'id' &&
+      typename &&
+      (typeof entry === 'string' || typeof entry === 'number')
+    ) {
+      result[key] = decodeNodeId(typename, entry);
       continue;
     }
 
-    const descriptor = config?.fields?.[key];
+    const descriptor = config?.fields?.[schemaField(key)];
     if (
       descriptor &&
       typeof descriptor === 'object' &&
@@ -577,6 +594,7 @@ const normalizeGraphQLValue = ({
     ) {
       result[key] = normalizeGraphQLValue({
         decodeNodeId,
+        selection: childSelection,
         type: 'type' in descriptor ? descriptor.type : descriptor.embedded,
         types,
         value: entry,
@@ -584,7 +602,12 @@ const normalizeGraphQLValue = ({
       continue;
     }
 
-    result[key] = normalizeGraphQLValue({ decodeNodeId, types, value: entry });
+    result[key] = normalizeGraphQLValue({
+      decodeNodeId,
+      selection: childSelection,
+      types,
+      value: entry,
+    });
   }
 
   return result;
@@ -709,8 +732,8 @@ export function createGraphQLTransport<
                 if (Object.hasOwn(definitions, key) || !isRecord(value)) {
                   return true;
                 }
-                const nestedArguments = schema.fields[resultType]?.[key];
-                const relation = types.get(resultType)?.fields?.[key];
+                const nestedArguments = schema.fields[resultType]?.[schemaField(key)];
+                const relation = types.get(resultType)?.fields?.[schemaField(key)];
                 return !(
                   nestedArguments &&
                   (Object.keys(nestedArguments).length > 0 ||
@@ -851,7 +874,13 @@ export function createGraphQLTransport<
             kind: 'query' as const,
             selection: `${mapping.field}${fieldArgs} { ${selection} }`,
             transform: (value: unknown) =>
-              normalizeGraphQLValue({ decodeNodeId, type, types, value }),
+              normalizeGraphQLValue({
+                decodeNodeId,
+                selection: buildSelectionTree(select),
+                type,
+                types,
+                value,
+              }),
             variables,
           };
         });
@@ -881,9 +910,15 @@ export function createGraphQLTransport<
           'type',
         )} { ${selection} } }`,
         transform: (value) =>
-          (Array.isArray(value) ? value : [])
-            .filter(Boolean)
-            .map((entry) => normalizeGraphQLValue({ decodeNodeId, type, types, value: entry })),
+          (Array.isArray(value) ? value : []).filter(Boolean).map((entry) =>
+            normalizeGraphQLValue({
+              decodeNodeId,
+              selection: buildSelectionTree(select),
+              type,
+              types,
+              value: entry,
+            }),
+          ),
         variables,
       }) as Promise<Array<unknown>>;
     },
@@ -917,6 +952,7 @@ export function createGraphQLTransport<
         transform: (value) =>
           normalizeGraphQLValue({
             decodeNodeId,
+            selection: buildSelectionTree(select),
             type: root.type,
             types,
             value,
@@ -961,6 +997,7 @@ export function createGraphQLTransport<
         transform: (value) =>
           normalizeGraphQLValue({
             decodeNodeId,
+            selection: buildSelectionTree(select),
             type: root.type,
             types,
             value,
@@ -1001,6 +1038,7 @@ export function createGraphQLTransport<
         transform: (value) =>
           normalizeGraphQLValue({
             decodeNodeId,
+            selection: buildSelectionTree(select),
             type: mutation.entity,
             types,
             value,
@@ -1009,6 +1047,7 @@ export function createGraphQLTransport<
       }) as Promise<Mutations[Extract<keyof Mutations, string>]['output']>;
     },
     mutateDurably,
+    supportsAliases: true,
   };
 
   if (live !== false) {
@@ -1183,5 +1222,12 @@ export function createGraphQLTransport<
     };
   }
 
-  return transport;
+  // The live endpoint uses fate's selection protocol, so lower aliases there as
+  // for other native transports. Ordinary GraphQL operations keep native aliases.
+  const liveTransport = withAliasSupport({ ...transport, supportsAliases: false });
+  return {
+    ...transport,
+    subscribeById: liveTransport.subscribeById,
+    subscribeConnection: liveTransport.subscribeConnection,
+  };
 }

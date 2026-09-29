@@ -1,3 +1,4 @@
+import { aliasedField, isAliasedSelection } from './alias.ts';
 import {
   applyArgsPayloadToPlan,
   combineArgsPayload,
@@ -96,6 +97,7 @@ export type QueryRequestDescriptor = Readonly<{
   kind: 'query';
   name: string;
   plan: SelectionPlan;
+  procedure: string;
   queryKey: string;
   refViewNames: ReadonlySet<string>;
   type: string;
@@ -107,6 +109,7 @@ export type ValueRequestDescriptor = Readonly<{
   kind: 'value';
   name: string;
   plan: SelectionPlan;
+  procedure: string;
   queryKey: string;
   refViewNames: ReadonlySet<string>;
   type: string;
@@ -120,6 +123,7 @@ export type ListRequestDescriptor = Readonly<{
   name: string;
   nodeRefViewNames: ReadonlySet<string>;
   plan: SelectionPlan;
+  procedure: string;
   type: string;
   viewSignature: string;
 }>;
@@ -182,7 +186,7 @@ const getRequestDescriptorKey = (items: ReadonlyArray<RequestItemDescriptor>): s
     }
   }
 
-  return parts.join('$');
+  return `${parts.join('$')}|${JSON.stringify(sorted.map((item) => ['procedure' in item ? item.procedure : item.type, [...item.plan.paths].sort()]))}`;
 };
 
 export const createRequestDescriptor = (
@@ -191,8 +195,13 @@ export const createRequestDescriptor = (
 ): RequestDescriptor => {
   const items: Array<RequestItemDescriptor> = [];
 
-  for (const [name, item] of Object.entries(request)) {
-    const type = getRootType(name);
+  for (const [name, rawItem] of Object.entries(request)) {
+    const item = isAliasedSelection(rawItem) ? rawItem.selection : rawItem;
+    const procedure = isAliasedSelection(rawItem) ? rawItem.field : name;
+    if (isAliasedSelection(rawItem)) {
+      aliasedField(name, procedure);
+    }
+    const type = getRootType(procedure);
 
     if (isValueItem(item)) {
       const plan =
@@ -204,7 +213,8 @@ export const createRequestDescriptor = (
         kind: 'value',
         name,
         plan,
-        queryKey: `${getRootDescriptorKey(name, item.args, plan)}#${[...plan.paths].sort().join(',')}`,
+        procedure,
+        queryKey: `${getRootDescriptorKey(procedure, item.args, plan)}#${[...plan.paths].sort().join(',')}`,
         refViewNames: new Set(),
         type,
       });
@@ -244,7 +254,8 @@ export const createRequestDescriptor = (
         kind: 'query',
         name,
         plan,
-        queryKey: getRootDescriptorKey(name, argsPayload, plan),
+        procedure,
+        queryKey: getRootDescriptorKey(procedure, argsPayload, plan),
         refViewNames: getRootViewNames(item.view),
         type,
         viewSignature: getViewSignature(item.view),
@@ -262,10 +273,11 @@ export const createRequestDescriptor = (
       argsPayload,
       hasItems,
       kind: 'list',
-      listKey: getRootListDescriptorKey(name, argsPayload, plan),
+      listKey: getRootListDescriptorKey(procedure, argsPayload, plan),
       name,
       nodeRefViewNames: getRootViewNames(nodeView),
       plan,
+      procedure,
       type,
       viewSignature: getViewSignature(item.list),
     });

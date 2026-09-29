@@ -96,6 +96,8 @@ export interface Transport<Mutations extends TransportMutations = EmptyTransport
     selectionArgs: ResolvedArgsPayload | undefined,
     handlers: LiveConnectionEventHandlers,
   ): () => void;
+  /** Accept resultName:schemaField selection paths and return records with those encoded keys. */
+  supportsAliases?: boolean;
 }
 
 /**

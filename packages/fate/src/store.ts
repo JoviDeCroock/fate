@@ -1,4 +1,5 @@
 import ViewDataCache from './cache.ts';
+import { argumentFieldKey } from './field-key.ts';
 import {
   cloneMask,
   diffPaths,
@@ -61,7 +62,7 @@ export type StoreChange =
 
 const listKeySeparator = ' __fate__ ';
 
-type ListKeyParts = Readonly<{ field: string; ownerId: EntityId }>;
+type ListKeyParts = Readonly<{ field: string; hash?: string; ownerId: EntityId }>;
 
 const decodeListKeyPart = (part: string): string => {
   try {
@@ -85,10 +86,11 @@ const parseListKey = (key: string): ListKeyParts | null => {
     return null;
   }
 
-  const [ownerId, field] = parts;
+  const [ownerId, field, hash] = parts;
 
   return {
     field: decodeListKeyPart(field),
+    hash: hash === 'default' ? undefined : decodeListKeyPart(hash),
     ownerId: decodeListKeyPart(ownerId),
   };
 };
@@ -269,9 +271,9 @@ export class Store {
             const owner = parseListKey(key);
             if (owner) {
               if (!records.has(owner.ownerId)) {
-                records.set(owner.ownerId, new Set([owner.field]));
+                records.set(owner.ownerId, new Set([argumentFieldKey(owner.field, owner.hash)]));
               } else {
-                records.get(owner.ownerId)?.add(owner.field);
+                records.get(owner.ownerId)?.add(argumentFieldKey(owner.field, owner.hash));
               }
             }
           } else if (before) {

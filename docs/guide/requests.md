@@ -224,3 +224,47 @@ a later confirmed write. It may still fill other fields. Root results and list
 replacements also retain the newer result. Optimistic layers remain visible over
 incoming confirmed data; rolling them back reveals that data, while committing a
 mutation protects its confirmed fields from older requests.
+
+### Aliases
+
+Use `alias(sourceField, selection)` to select one schema field under multiple
+result names, with independent arguments:
+
+```ts
+const GamesView = view<User>()({
+  activeGames: alias('games', {
+    args: { first: 20, status: 'Active' },
+    items: { node: GameView },
+    pagination: { hasNext: true, nextCursor: true },
+  }),
+  waitingGames: alias('games', {
+    args: { first: 20, status: 'Waiting' },
+    items: { node: GameView },
+  }),
+  displayName: alias('name', true),
+});
+
+const request = { currentUser: alias('viewer', { view: GamesView }) };
+```
+
+Source fields, nested selections, result types, and generated root argument
+contracts remain checked. Alias names affect the returned shape; normalized
+identity uses the source field and its arguments. An ordinary selection with the
+same arguments shares the cached data. Connection filters identify separate
+cache slots and pagination state. Conflicting response names or arguments in a
+composed view fail during planning. `id` and `__typename` are reserved result
+names because fate needs them for entity identity.
+
+GraphQL emits native aliases, including inside mutation selections, so multiple
+variants execute in one operation. Native HTTP, tRPC, and custom transports
+receive compatible reads with ordinary schema field names; conflicting variants
+may require multiple reads or subscriptions. These fallback reads are independent
+server operations. A mutation that needs multiple variants requires native alias
+support and otherwise rejects before executing. A simple rename is lowered for
+native mutations without repeating the action.
+
+Custom transports can set `supportsAliases: true` to handle the full selection in
+one operation. Selection path segments and corresponding argument keys then use
+`resultName:schemaField`, and returned records must use those same encoded keys.
+GraphQL performs that conversion automatically. Applications consume the declared
+result names, never the encoded transport names.

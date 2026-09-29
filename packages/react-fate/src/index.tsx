@@ -1,3 +1,4 @@
+export { alias, type AliasedSelection } from '@nkzw/fate';
 /**
  * The react fate library.
  *

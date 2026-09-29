@@ -1,14 +1,19 @@
 import type {
-  __FateEntityBrand,
-  __FateSelectionBrand,
   Entity,
   Selection,
+  ValidateSelection,
   View,
   ViewPayload,
   ViewRef,
   ViewTag,
 } from './types.ts';
 import { getViewTag, isViewTag, ViewKind, ViewsTag } from './types.ts';
+
+type MutableSelection<T extends Entity, S extends Selection<T>> = {
+  -readonly [K in keyof S]: S[K];
+} extends infer Mutable extends Selection<T>
+  ? Mutable
+  : never;
 
 /**
  * Collects all view payloads that apply to the given ref.
@@ -91,14 +96,6 @@ const getStableId = () => {
   return String(id++);
 };
 
-type SelectionValidation<T extends Entity, S extends Selection<T>> =
-  Exclude<
-    keyof Omit<S, typeof __FateEntityBrand | typeof __FateSelectionBrand>,
-    keyof Selection<T>
-  > extends never
-    ? unknown
-    : never;
-
 /**
  * Creates a reusable view for an object using the declared selection.
  *
@@ -111,7 +108,9 @@ type SelectionValidation<T extends Entity, S extends Selection<T>> =
 export function view<T extends Entity>() {
   const viewId = getStableId();
 
-  return <S extends Selection<T>>(select: S & SelectionValidation<T, S>): View<T, S> => {
+  return <const S extends Selection<T>>(
+    select: S & ValidateSelection<T, S>,
+  ): View<T, MutableSelection<T, S>> => {
     const payload = Object.freeze({
       select,
       [ViewKind]: true,
@@ -124,6 +123,6 @@ export function view<T extends Entity>() {
       writable: false,
     });
 
-    return Object.freeze(viewComposition) as View<T, S>;
+    return Object.freeze(viewComposition) as View<T, MutableSelection<T, S>>;
   };
 }
