@@ -1,7 +1,9 @@
 import { buildSchema, graphql } from 'graphql';
 import { beforeEach, expect, test, vi } from 'vite-plus/test';
+import { createClient } from '../client.ts';
 import { createGraphQLArgumentSchema } from '../codegen/graphql.ts';
 import { createGraphQLTransport } from '../graphqlTransport.ts';
+import { clientValueRoot } from '../root.ts';
 
 const graphQLSSE = vi.hoisted(() => ({
   createClient: vi.fn(),
@@ -27,6 +29,45 @@ beforeEach(() => {
   graphQLSSE.subscribe.mockReset();
   graphQLSSE.createClient.mockReturnValue({ subscribe: graphQLSSE.subscribe });
   graphQLSSE.subscribe.mockReturnValue(vi.fn());
+});
+
+test('fetches and caches scalar query roots without entity identities', async () => {
+  const fetch = vi.fn(async () => jsonResponse({ data: { f1: false, f2: '', f3: 0 } }));
+  const transport = createGraphQLTransport({
+    fetch,
+    live: false,
+    roots: {
+      origin: { field: 'origin', type: 'Boolean' },
+      replay: { field: 'fetchReplay', type: 'String' },
+      stars: { field: 'stars', type: 'Int' },
+    },
+    types: [],
+    url: '/graphql',
+  });
+  const roots = {
+    origin: clientValueRoot<boolean>(),
+    replay: clientValueRoot<string>(),
+    stars: clientValueRoot<number>(),
+  };
+  const client = createClient({ roots, transport, types: [] });
+  const request = {
+    origin: { value: true },
+    replay: { value: true },
+    stars: { value: true },
+  } as const;
+
+  await expect(client.request(request)).resolves.toEqual({ origin: false, replay: '', stars: 0 });
+  await expect(client.request(request)).resolves.toEqual({ origin: false, replay: '', stars: 0 });
+  expect(fetch).toHaveBeenCalledTimes(1);
+  const restored = createClient({ roots, transport, types: [] });
+  restored.hydrate(client.dehydrate());
+  await expect(restored.request(request)).resolves.toEqual({ origin: false, replay: '', stars: 0 });
+  expect(fetch).toHaveBeenCalledTimes(1);
+  const query = getRequestBody(fetch).query;
+  expect(query).toContain('origin');
+  expect(query).not.toContain('origin {');
+  expect(query).not.toContain('stars {');
+  expect(query).not.toContain('fetchReplay {');
 });
 
 test('fetches nodes through the Relay nodes field and decodes global ids', async () => {

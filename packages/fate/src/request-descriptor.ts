@@ -13,6 +13,7 @@ import {
   isNodeItem,
   isNodesItem,
   isQueryItem,
+  isValueItem,
   isViewTag,
   type AnyRecord,
   type Request,
@@ -101,6 +102,16 @@ export type QueryRequestDescriptor = Readonly<{
   viewSignature: string;
 }>;
 
+export type ValueRequestDescriptor = Readonly<{
+  argsPayload: ResolvedArgsPayload | undefined;
+  kind: 'value';
+  name: string;
+  plan: SelectionPlan;
+  queryKey: string;
+  refViewNames: ReadonlySet<string>;
+  type: string;
+}>;
+
 export type ListRequestDescriptor = Readonly<{
   argsPayload: ResolvedArgsPayload | undefined;
   hasItems: boolean;
@@ -116,6 +127,7 @@ export type ListRequestDescriptor = Readonly<{
 export type RequestItemDescriptor =
   | NodeRequestDescriptor
   | QueryRequestDescriptor
+  | ValueRequestDescriptor
   | ListRequestDescriptor;
 
 export type RequestDescriptor = Readonly<{
@@ -152,9 +164,9 @@ const getRequestDescriptorKey = (items: ReadonlyArray<RequestItemDescriptor>): s
       continue;
     }
 
-    if (item.kind === 'query') {
+    if (item.kind === 'query' || item.kind === 'value') {
       parts.push(
-        `query:${item.name}:${item.viewSignature}:${
+        `${item.kind}:${item.name}:${item.kind === 'query' ? item.viewSignature : ''}:${
           item.argsPayload ? hashArgs(item.argsPayload) : ''
         }`,
       );
@@ -181,6 +193,20 @@ export const createRequestDescriptor = (
 
   for (const [name, item] of Object.entries(request)) {
     const type = getRootType(name);
+
+    if (isValueItem(item)) {
+      const plan = { args: new Map(), live: new Map(), paths: new Set<string>() };
+      items.push({
+        argsPayload: item.args,
+        kind: 'value',
+        name,
+        plan,
+        queryKey: getRootDescriptorKey(name, item.args, plan),
+        refViewNames: new Set(),
+        type,
+      });
+      continue;
+    }
 
     if (isNodeItem(item)) {
       items.push({

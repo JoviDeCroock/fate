@@ -12,3 +12,11 @@ export function clientRoot<Result, Type extends TypeName, Args = AnyRecord>(
     type,
   }) as RootDefinition<Type, Result, Args>;
 }
+
+export function clientValueRoot<Result, Args = AnyRecord>(): RootDefinition<
+  '__value__',
+  Result,
+  Args
+> {
+  return clientRoot<Result, '__value__', Args>('__value__');
+}

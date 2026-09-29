@@ -57,6 +57,7 @@ import {
   resolveSelectionPlan,
   type ListRequestDescriptor,
   type QueryRequestDescriptor,
+  type ValueRequestDescriptor,
   type RequestDescriptor,
 } from './request-descriptor.ts';
 import FateRequestPromise from './request-promise.ts';
@@ -457,6 +458,7 @@ export class FateClient<
     { fetchAll: boolean; persist?: { maxAge: number } }
   >();
   private readonly rootRequests = new Map<string, EntityId | null>();
+  private readonly rootValues = new Map<string, unknown>();
   private readonly stalledRequests = new Set<string>();
   private gcPending = false;
   private gcScheduled = false;
@@ -602,6 +604,7 @@ export class FateClient<
         {
           rootLists: [...this.rootLists].map(([type, keys]) => [type, [...keys]]),
           rootRequests: [...this.rootRequests],
+          rootValues: [...this.rootValues],
           store: this.store.dehydrate(),
         },
         this.hydrationLimits,
@@ -642,6 +645,7 @@ export class FateClient<
     if (mode === 'replace') {
       this.rootLists.clear();
       this.rootRequests.clear();
+      this.rootValues.clear();
       this.stableRefs.clear();
     }
 
@@ -662,6 +666,12 @@ export class FateClient<
       }
     }
 
+    for (const [key, value] of decoded.rootValues ?? []) {
+      if (mode === 'replace' || !this.rootValues.has(key)) {
+        this.rootValues.set(key, value);
+      }
+    }
+
     this.stalledRequests.clear();
     this.viewDataCache.clear();
     notify();
@@ -674,6 +684,7 @@ export class FateClient<
         {
           rootLists: [...this.rootLists].map(([type, keys]) => [type, [...keys]]),
           rootRequests: [...this.rootRequests],
+          rootValues: [...this.rootValues],
           store: this.store.dehydrateConfirmed(),
         },
         this.hydrationLimits,
@@ -724,6 +735,11 @@ export class FateClient<
       for (const [key, id] of state.rootRequests) {
         if (!this.rootRequests.has(key)) {
           this.rootRequests.set(key, id);
+        }
+      }
+      for (const [key, value] of state.rootValues ?? []) {
+        if (!this.rootValues.has(key)) {
+          this.rootValues.set(key, value);
         }
       }
       for (const [type, keys] of state.rootLists) {
@@ -2292,6 +2308,7 @@ export class FateClient<
     optimisticRoots.records.forEach(markRecord);
     optimisticRoots.lists.forEach(markList);
 
+    const retainedValueKeys = new Set<string>();
     for (const descriptor of this.operationLifetime.getDescriptors()) {
       for (const item of descriptor.items) {
         if (item.kind === 'node' || item.kind === 'nodes') {
@@ -2303,6 +2320,11 @@ export class FateClient<
 
         if (item.kind === 'query') {
           markRecord(this.rootRequests.get(item.queryKey));
+          continue;
+        }
+
+        if (item.kind === 'value') {
+          retainedValueKeys.add(item.queryKey);
           continue;
         }
 
@@ -2355,6 +2377,12 @@ export class FateClient<
         if (entityId && swept.records.has(entityId)) {
           this.rootRequests.delete(key);
         }
+      }
+    }
+
+    for (const key of this.rootValues.keys()) {
+      if (!retainedValueKeys.has(key)) {
+        this.rootValues.delete(key);
       }
     }
 
@@ -2618,6 +2646,16 @@ export class FateClient<
         }
         fetchedAll &&= fetchedIds.length === item.ids.length;
       } else {
+        if (item.kind === 'value') {
+          if (fetchAll || !this.rootValues.has(item.queryKey)) {
+            promises.push(this.fetchValue(item));
+            fetchedItems.push(item);
+          } else {
+            fetchedAll = false;
+          }
+          continue;
+        }
+
         if (item.kind === 'query') {
           const hasResult = this.rootRequests.has(item.queryKey);
           const entityId = this.rootRequests.get(item.queryKey);
@@ -2709,6 +2747,13 @@ export class FateClient<
         continue;
       }
 
+      if (item.kind === 'value') {
+        if (!this.rootValues.has(item.queryKey)) {
+          return false;
+        }
+        continue;
+      }
+
       if (item.kind !== 'list') {
         continue;
       }
@@ -2751,6 +2796,11 @@ export class FateClient<
         } else {
           result[item.name] = null;
         }
+        continue;
+      }
+
+      if (item.kind === 'value') {
+        result[item.name] = this.rootValues.get(item.queryKey);
         continue;
       }
 
@@ -2833,6 +2883,17 @@ export class FateClient<
       const entityId = this.writeEntity(item.type, record as AnyRecord, item.plan.paths, item.plan);
       this.rootRequests.set(item.queryKey, entityId);
     });
+  }
+
+  private async fetchValue(item: ValueRequestDescriptor) {
+    if (!this.transport.fetchQuery) {
+      throw new Error(`fate: transport does not support value queries for '${item.name}'.`);
+    }
+    const value = await this.trackPendingRequest(() =>
+      this.transport.fetchQuery!(item.name, new Set(), item.argsPayload),
+    );
+    this.assertPersistenceActive();
+    this.rootValues.set(item.queryKey, value);
   }
 
   private async fetchListAndNormalize(item: ListRequestDescriptor) {

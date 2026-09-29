@@ -356,6 +356,11 @@ export type QueryItem<V extends View<any, any>> = Readonly<{
   view: V;
 }>;
 
+export type ValueItem = Readonly<{
+  args?: Record<string, unknown>;
+  value: true;
+}>;
+
 /** Definition of a node request with one explicit ID for fetching data from the backend. */
 export type NodeItem<V extends View<any, any>> = Readonly<{
   id: string | number;
@@ -372,7 +377,8 @@ type RequestItem =
   | ListItem<View<any, any>>
   | NodeItem<View<any, any>>
   | NodesItem<View<any, any>>
-  | QueryItem<View<any, any>>;
+  | QueryItem<View<any, any>>
+  | ValueItem;
 
 /** Collection of node and list requests describing the data a screen needs. */
 export type Request = Record<string, RequestItem>;
@@ -382,7 +388,7 @@ type AnyListItem = ListItem<AnyView>;
 type AnyQueryItem = QueryItem<AnyView>;
 type AnyNodeItem = NodeItem<AnyView>;
 type AnyNodesItem = NodesItem<AnyView>;
-type AnyRequestItem = AnyListItem | AnyNodeItem | AnyNodesItem | AnyQueryItem;
+type AnyRequestItem = AnyListItem | AnyNodeItem | AnyNodesItem | AnyQueryItem | ValueItem;
 type AnyRequest = Record<string, AnyRequestItem>;
 
 /**
@@ -393,29 +399,27 @@ type ConnectionNodeType<Root> = Root extends { items?: { node?: infer Node } }
   ? ViewEntityName<Node & View<any, any>>
   : never;
 
-type ListResult<
-  Item extends AnyRequestItem,
-  Type extends TypeName,
-  Result,
-> = Item extends AnyNodeItem
-  ? ViewRef<Type>
-  : Item extends AnyNodesItem
-    ? Array<ViewRef<Type>>
-    : Item extends AnyQueryItem
-      ? Result extends null
-        ? ViewRef<Type> | null
-        : ViewRef<Type>
-      : Item extends AnyListItem
-        ? Item['list'] extends { items?: { node?: View<any, any> } }
-          ? Readonly<{
-              items: ReadonlyArray<{
-                cursor?: string | undefined;
-                node: ViewRef<ConnectionNodeType<Item['list']>>;
-              }>;
-              pagination?: Pagination;
-            }>
-          : Array<ViewRef<Type>>
-        : never;
+type ListResult<Item extends AnyRequestItem, Type extends TypeName, Result> = Item extends ValueItem
+  ? Result
+  : Item extends AnyNodeItem
+    ? ViewRef<Type>
+    : Item extends AnyNodesItem
+      ? Array<ViewRef<Type>>
+      : Item extends AnyQueryItem
+        ? Result extends null
+          ? ViewRef<Type> | null
+          : ViewRef<Type>
+        : Item extends AnyListItem
+          ? Item['list'] extends { items?: { node?: View<any, any> } }
+            ? Readonly<{
+                items: ReadonlyArray<{
+                  cursor?: string | undefined;
+                  node: ViewRef<ConnectionNodeType<Item['list']>>;
+                }>;
+                pagination?: Pagination;
+              }>
+            : Array<ViewRef<Type>>
+          : never;
 
 /**
  * The result of a `FateClient.request` and `useRequest` call, mapping each
@@ -453,6 +457,10 @@ export function isNodesItem(item: AnyRequestItem): item is AnyNodesItem {
 /** Indicates whether a request item represents a root query. */
 export function isQueryItem(item: AnyRequestItem): item is AnyQueryItem {
   return 'view' in item && !('id' in item) && !('ids' in item);
+}
+
+export function isValueItem(item: AnyRequestItem): item is ValueItem {
+  return 'value' in item;
 }
 
 /** Brand used on root definitions to mark their identity in the d.ts output. */

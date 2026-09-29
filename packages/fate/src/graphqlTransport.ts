@@ -340,6 +340,9 @@ const rootArgsToGraphQL = ({
   if (schema) {
     return argumentsForField(schema.queryType, field, args, type);
   }
+  if (type === '__value__' || ['Boolean', 'Int', 'Float', 'String', 'ID'].includes(type)) {
+    return argumentsForField('Query', field, args);
+  }
   const fields = getTypeConfig(types, type).fields ?? {};
   const rootArgs = Object.fromEntries(
     Object.entries(args ?? {}).filter(([key]) => {
@@ -827,14 +830,17 @@ export function createGraphQLTransport<
 
       const { argumentsForField, variables } = operationArguments();
       const field = assertIdentifier(root.field ?? name, 'field');
-      const selection = buildRecordSelection({
-        args,
-        argumentsForField,
-        path: '',
-        select,
-        type: root.type,
-        types,
-      });
+      const selection =
+        root.type === '__value__' || ['Boolean', 'Int', 'Float', 'String', 'ID'].includes(root.type)
+          ? ''
+          : buildRecordSelection({
+              args,
+              argumentsForField,
+              path: '',
+              select,
+              type: root.type,
+              types,
+            });
       const rootArgs = rootArgsToGraphQL({
         args,
         argumentsForField,
@@ -845,7 +851,7 @@ export function createGraphQLTransport<
       });
       return enqueue({
         kind: 'query',
-        selection: `${field}${rootArgs} { ${selection} }`,
+        selection: `${field}${rootArgs}${selection ? ` { ${selection} }` : ''}`,
         transform: (value) =>
           normalizeGraphQLValue({
             decodeNodeId,

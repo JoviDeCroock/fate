@@ -4,6 +4,7 @@ import type {
   ListRequestDescriptor,
   NodeRequestDescriptor,
   QueryRequestDescriptor,
+  ValueRequestDescriptor,
   RequestDescriptor,
   RequestItemDescriptor,
 } from './request-descriptor.ts';
@@ -24,11 +25,19 @@ type SerializedQueryRequest = Omit<QueryRequestDescriptor, 'plan' | 'refViewName
   plan: SerializedSelectionPlan;
   refViewNames: Array<string>;
 };
+type SerializedValueRequest = Omit<ValueRequestDescriptor, 'plan' | 'refViewNames'> & {
+  plan: SerializedSelectionPlan;
+  refViewNames: Array<string>;
+};
 type SerializedListRequest = Omit<ListRequestDescriptor, 'nodeRefViewNames' | 'plan'> & {
   nodeRefViewNames: Array<string>;
   plan: SerializedSelectionPlan;
 };
-type SerializedRequestItem = SerializedListRequest | SerializedNodeRequest | SerializedQueryRequest;
+type SerializedRequestItem =
+  | SerializedListRequest
+  | SerializedNodeRequest
+  | SerializedQueryRequest
+  | SerializedValueRequest;
 type SerializedRequest = {
   items: Array<SerializedRequestItem>;
   key: string;
@@ -74,7 +83,10 @@ const isSerializedRequest = (value: unknown): value is SerializedRequest =>
       isSerializedPlan(item.plan) &&
       (item.kind === 'list'
         ? isStringArray(item.nodeRefViewNames)
-        : (item.kind === 'node' || item.kind === 'nodes' || item.kind === 'query') &&
+        : (item.kind === 'node' ||
+            item.kind === 'nodes' ||
+            item.kind === 'query' ||
+            item.kind === 'value') &&
           isStringArray(item.refViewNames)),
   );
 

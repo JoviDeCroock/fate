@@ -45,6 +45,7 @@ export type HydrationLimits = Readonly<{
 export type ClientHydrationState = Readonly<{
   rootLists: ReadonlyArray<readonly [string, ReadonlyArray<string>]>;
   rootRequests: ReadonlyArray<readonly [string, string | null]>;
+  rootValues?: ReadonlyArray<readonly [string, unknown]>;
   store: StoreHydrationState;
 }>;
 
@@ -410,7 +411,7 @@ const listKeys = new Set([
   'pendingBeforeIds',
 ]);
 const paginationKeys = new Set(['hasNext', 'hasPrevious', 'nextCursor', 'previousCursor']);
-const clientStateKeys = new Set(['rootLists', 'rootRequests', 'store']);
+const clientStateKeys = new Set(['rootLists', 'rootRequests', 'rootValues', 'store']);
 const storeStateKeys = new Set(['coverage', 'lists', 'records']);
 
 const isEntry = (value: unknown): value is [string, unknown] =>
@@ -473,6 +474,7 @@ export const decodeClientHydrationState = (
     !hasOnlyKeys(decoded, clientStateKeys) ||
     !Array.isArray(decoded.rootLists) ||
     !Array.isArray(decoded.rootRequests) ||
+    (decoded.rootValues !== undefined && !Array.isArray(decoded.rootValues)) ||
     !isRecord(decoded.store) ||
     !hasOnlyKeys(decoded.store, storeStateKeys) ||
     !Array.isArray(decoded.store.coverage) ||
@@ -487,6 +489,7 @@ export const decodeClientHydrationState = (
     decoded.rootRequests.some(
       (entry) => !isEntry(entry) || (entry[1] !== null && typeof entry[1] !== 'string'),
     ) ||
+    (decoded.rootValues as Array<unknown> | undefined)?.some((entry) => !isEntry(entry)) ||
     decoded.store.coverage.some((entry) => !isEntry(entry) || !isFieldPathArray(entry[1])) ||
     decoded.store.lists.some((entry) => !isEntry(entry) || !isList(entry[1])) ||
     decoded.store.records.some((entry) => !isEntry(entry) || !isRecord(entry[1]))
@@ -497,6 +500,7 @@ export const decodeClientHydrationState = (
   if (
     hasDuplicateEntries(decoded.rootLists) ||
     hasDuplicateEntries(decoded.rootRequests) ||
+    (decoded.rootValues && hasDuplicateEntries(decoded.rootValues as Array<unknown>)) ||
     hasDuplicateEntries(decoded.store.coverage) ||
     hasDuplicateEntries(decoded.store.lists) ||
     hasDuplicateEntries(decoded.store.records) ||

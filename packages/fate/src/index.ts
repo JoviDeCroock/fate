@@ -40,6 +40,7 @@ export type {
   ViewSelection,
   ViewSnapshot,
   ViewTag,
+  ValueItem,
 } from './types.ts';
 export type { DeferredSnapshot, RequestMode, RequestOptions } from './client.ts';
 export type { FateDehydratedState, HydrationLimits, HydrateOptions } from './hydration.ts';
@@ -74,7 +75,7 @@ export type {
 export { getSelectionPlan } from './selection.ts';
 export { isRecord } from './record.ts';
 export { mutation } from './mutation.ts';
-export { clientRoot } from './root.ts';
+export { clientRoot, clientValueRoot } from './root.ts';
 export { toEntityId } from './ref.ts';
 export { view } from './view.ts';
 
