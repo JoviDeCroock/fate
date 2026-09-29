@@ -25,7 +25,7 @@ The client-only template is the smallest reference for the integration. It conta
 The GraphQL transport expects a schema with Relay-style object identity and pagination:
 
 - Entity objects include `id` and `__typename`.
-- Object fetches go through a `nodes(ids:)` field.
+- Object fetches use `nodes(ids:)` by default, or configured per-type query fields.
 - List fields return Relay connections with `edges`, `cursor`, `node`, and `pageInfo`.
 - Root queries and mutations return the entity type selected by the fate view.
 
@@ -203,6 +203,31 @@ const fate = createFateClient({
 GraphQL operations issued in the same microtask are batched into a single GraphQL query or mutation document with aliased fields.
 
 Deferred view fields work with the GraphQL transport through the same normalized cache flow as native HTTP: the eager query omits `defer(...)` fields, and `useView`, `useListView`, or `useLiveListView` fetches the missing selection through `nodes(ids:)` when the deferred handle is read. GraphQL `@defer` is the natural wire format for this feature, but fate's GraphQL transport currently expects one JSON result per operation and does not consume incremental multipart patches yet.
+
+## Refetch Fields
+
+For servers without `nodes(ids:)`, configure a query field for each refetchable entity type:
+
+```tsx
+export const fateGraphQL = {
+  byId: {
+    Game: { field: 'fetch__Game' },
+    User: { field: 'fetch__User', idArg: 'id' },
+  },
+  nodes: false,
+  // Keep your schema, roots, and mutations here.
+} as const;
+```
+
+`idArg` defaults to `id`. Each mapped field must return one entity of the named type, optionally nullable. The adapter batches multiple IDs into aliased query fields in one request, preserves input order for returned records, and omits null results. Node ID encoding and decoding apply to mapped fetches too.
+
+Mappings take precedence over the default `nodes(ids:)` fallback. Set `nodes: false` to disable that fallback; fetching an unmapped type then reports a configuration error without issuing a request. Existing clients need no configuration changes. Direct users of `createGraphQLTransport` can pass the same `byId` and `nodes` options.
+
+When `schema` is supplied, codegen and transport construction validate the mapping: the field must exist, its ID argument must accept a single `ID`, `String`, or `Int`, its result must match the concrete entity type, and any other arguments must be optional or have defaults. Schema metadata also supplies the wire variable types. Without a schema, identifiers are validated and arguments use GraphQL literals.
+
+Nested pagination uses the owner ID only for the mapped query field. Pagination and filter arguments remain on the connection field. For example, fetching another page of a user's games produces `fetch__User(id: $owner) { games(first: $count, after: $cursor) { ... } }`.
+
+Choose fields with the appropriate authorization rules for the consuming views. The adapter does not switch between public and authenticated lookup fields automatically.
 
 ## Object IDs
 

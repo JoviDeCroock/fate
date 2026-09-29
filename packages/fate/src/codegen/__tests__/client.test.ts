@@ -450,3 +450,43 @@ test.each(['react-fate', 'vue-fate'] as const)(
     expect(sourceText).toContain('live: connectLiveStream');
   },
 );
+
+const refetchSDL = `
+  type Query {
+    viewer: User
+    fetch__User(id: ID!): User
+    byKey(key: ID!): User!
+    wrong(id: ID!): Game
+    many(ids: [ID!]!): [User!]!
+    filtered(id: ID!, tenant: String!): User
+  }
+  type User { id: ID! }
+  type Game { id: ID! }
+`;
+
+const generateRefetchClient = (byId: Record<string, { field: string; idArg?: string }>) =>
+  createClientSource({
+    moduleExports: { fateGraphQL: { byId, nodes: false, schema: refetchSDL } },
+    moduleName: './graphql.ts',
+    transport: 'graphql',
+  });
+
+test('generates configured GraphQL refetch mappings and disables the nodes fallback', () => {
+  const source = generateRefetchClient({ User: { field: 'byKey', idArg: 'key' } });
+  expect(source).toContain('"byId":');
+  expect(source).toContain('"field": "byKey"');
+  expect(source).toContain('"idArg": "key"');
+  expect(source).toContain('"nodes": false');
+  expect(source).toContain('byId: graphQL.byId');
+  expect(source).toContain('nodes: graphQL.nodes');
+});
+
+test.each([
+  [{ User: { field: 'missing' } }, /Query.missing/],
+  [{ User: { field: 'byKey' } }, /Query.byKey.id/],
+  [{ User: { field: 'wrong' } }, /return.*User/],
+  [{ User: { field: 'many', idArg: 'ids' } }, /Query.many.ids/],
+  [{ User: { field: 'filtered' } }, /tenant/],
+])('rejects invalid GraphQL refetch mappings during codegen: %j', (mapping, error) => {
+  expect(() => generateRefetchClient(mapping)).toThrow(error);
+});

@@ -1,7 +1,9 @@
 import {
   graphQLOutputRelations,
   validateGraphQLArguments,
+  validateGraphQLRefetchMappings,
   type GraphQLArgumentSchema,
+  type GraphQLByIdConfig,
 } from './graphqlSchema.ts';
 import { isRecord } from './record.ts';
 import type { Transport } from './transport.ts';
@@ -94,6 +96,7 @@ type GraphQLLiveOptions = {
 export type GraphQLTransportOptions<
   Mutations extends TransportMutations = EmptyTransportMutations,
 > = {
+  byId?: Readonly<Record<string, GraphQLByIdConfig>>;
   decodeNodeId?: (type: string, id: string | number) => string | number;
   encodeNodeId?: (type: string, id: string | number) => string | number;
   eventSource?: EventSourceConstructor;
@@ -102,6 +105,7 @@ export type GraphQLTransportOptions<
   live?: boolean | GraphQLLiveOptions;
   mutateDurably?: Transport<Mutations>['mutateDurably'];
   mutations?: Record<Extract<keyof Mutations, string>, GraphQLMutationRuntimeConfig>;
+  nodes?: boolean;
   roots?: Record<string, GraphQLRootConfig>;
   schema?: GraphQLArgumentSchema;
   types: ReadonlyArray<Omit<TypeConfig, 'getId'> & Partial<Pick<TypeConfig, 'getId'>>>;
@@ -672,6 +676,7 @@ export function graphqlValueMutation<Input, Output>(options: {
 export function createGraphQLTransport<
   Mutations extends TransportMutations = EmptyTransportMutations,
 >({
+  byId,
   decodeNodeId = defaultDecodeNodeId,
   encodeNodeId = defaultEncodeNodeId,
   fetch: fetchImpl = defaultFetch,
@@ -679,11 +684,13 @@ export function createGraphQLTransport<
   live = true,
   mutateDurably,
   mutations,
+  nodes = true,
   roots,
   schema,
   types: typeConfigs,
   url,
 }: GraphQLTransportOptions<Mutations>): Transport<Mutations> {
+  validateGraphQLRefetchMappings(byId, schema);
   const endpoint = normalizeEndpoint(url);
   const types = new Map<string, TypeConfig>(
     graphQLOutputRelations(schema).map((type) => [
@@ -835,6 +842,42 @@ export function createGraphQLTransport<
 
   const transport: Transport<Mutations> = {
     fetchById(type, ids, select, args) {
+      if (!ids.length) {
+        return Promise.resolve([]);
+      }
+      const mapping = byId?.[type];
+      if (mapping) {
+        const paths = new Set(select);
+        const operations = ids.map((id) => {
+          const { argumentsForField, variables } = operationArguments();
+          const fieldArgs = argumentsForField(schema?.queryType ?? 'Query', mapping.field, {
+            [mapping.idArg ?? 'id']: encodeNodeId(type, id),
+          });
+          const selection = buildRecordSelection({
+            args,
+            argumentsForField,
+            path: '',
+            select: paths,
+            type,
+            types,
+          });
+          return {
+            kind: 'query' as const,
+            selection: `${mapping.field}${fieldArgs} { ${selection} }`,
+            transform: (value: unknown) =>
+              normalizeGraphQLValue({ decodeNodeId, type, types, value }),
+            variables,
+          };
+        });
+        return Promise.all(operations.map(enqueue)).then((records) =>
+          records.filter((record) => record != null),
+        );
+      }
+      if (!nodes) {
+        throw new Error(
+          `fate(graphql): No refetch mapping for '${type}' and the nodes fallback is disabled.`,
+        );
+      }
       const { argumentsForField, variables } = operationArguments();
       const globalIds = ids.map((id) => encodeNodeId(type, id));
       const selection = buildRecordSelection({

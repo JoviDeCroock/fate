@@ -4,6 +4,45 @@ import type { RelationDescriptor } from './types.ts';
 export type GraphQLArgument = Readonly<{ hasDefault?: boolean; type: string }>;
 export type GraphQLArguments = Readonly<Record<string, GraphQLArgument>>;
 
+export type GraphQLByIdConfig = Readonly<{ field: string; idArg?: string }>;
+
+export const validateGraphQLRefetchMappings = (
+  byId: Readonly<Record<string, GraphQLByIdConfig>> | undefined,
+  schema?: GraphQLArgumentSchema,
+) => {
+  for (const [type, { field, idArg = 'id' }] of Object.entries(byId ?? {})) {
+    for (const name of [type, field, idArg]) {
+      if (!/^[_A-Za-z][_0-9A-Za-z]*$/.test(name)) {
+        throw new Error(`fate(graphql): Invalid refetch identifier '${name}'.`);
+      }
+    }
+    if (!schema) {
+      continue;
+    }
+    const path = `${schema.queryType}.${field}`;
+    const args = schema.fields[schema.queryType]?.[field];
+    if (!args) {
+      throw new Error(`fate(graphql): Unknown refetch field '${path}'.`);
+    }
+    if (!args[idArg] || !/^(ID|String|Int)!?$/.test(args[idArg].type)) {
+      throw new Error(
+        `fate(graphql): Refetch argument '${path}.${idArg}' must accept one ID, String, or Int.`,
+      );
+    }
+    for (const [name, arg] of Object.entries(args)) {
+      if (name !== idArg && arg.type.endsWith('!') && !arg.hasDefault) {
+        throw new Error(
+          `fate(graphql): Refetch field '${path}' requires unsupported argument '${name}'.`,
+        );
+      }
+    }
+    const output = schema.outputs?.[schema.queryType]?.[field];
+    if (schema.outputs && (output?.replace(/!$/, '') !== type || !schema.outputs[type]?.id)) {
+      throw new Error(`fate(graphql): Refetch field '${path}' must return one '${type}' entity.`);
+    }
+  }
+};
+
 /** Build-time schema metadata needed to validate inputs and declare wire variables. */
 export type GraphQLArgumentSchema = Readonly<{
   fields: Readonly<Record<string, Readonly<Record<string, GraphQLArguments>>>>;

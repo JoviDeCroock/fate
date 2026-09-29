@@ -1,5 +1,9 @@
 import type { GraphQLSchema } from 'graphql';
-import { graphQLOutputRelations } from '../graphqlSchema.ts';
+import {
+  graphQLOutputRelations,
+  validateGraphQLRefetchMappings,
+  type GraphQLByIdConfig,
+} from '../graphqlSchema.ts';
 import { sortObjectKeys } from '../sortObjectKeys.ts';
 import type { FateViteTransport } from '../viteTypes.ts';
 import {
@@ -424,10 +428,12 @@ const createGraphQLClientSource = ({
     Root ?? {},
   );
   const graphQLConfig = (moduleExports[graphQLConfigExportName] ?? {}) as {
+    byId?: Readonly<Record<string, GraphQLByIdConfig>>;
     mutations?: Record<
       string,
       { entity: string; field: string; inputArg?: false | string; type?: string }
     >;
+    nodes?: boolean;
     roots?: Record<string, { embedded?: boolean; field?: string; type?: string }>;
     schema?: string | GraphQLSchema;
     types?: ReadonlyArray<{ fields?: Record<string, any>; type: string }>;
@@ -435,6 +441,7 @@ const createGraphQLClientSource = ({
   const argumentSchema = graphQLConfig.schema
     ? createGraphQLArgumentSchema(graphQLConfig.schema)
     : undefined;
+  validateGraphQLRefetchMappings(graphQLConfig.byId, argumentSchema);
   const inferredTypes = graphQLOutputRelations(argumentSchema);
   const inferredByType = new Map(inferredTypes.map((entry) => [entry.type, entry]));
   const explicitByType = new Map((graphQLConfig.types ?? []).map((entry) => [entry.type, entry]));
@@ -642,7 +649,9 @@ ${Object.entries(argumentSchema.fields[type] ?? {})
     ]),
   );
   const graphQLRuntimeConfig = {
+    ...(graphQLConfig.byId ? { byId: graphQLConfig.byId } : null),
     mutations: graphQLMutations,
+    ...(graphQLConfig.nodes !== undefined ? { nodes: graphQLConfig.nodes } : null),
     roots: graphQLRoots,
     ...(argumentSchema ? { schema: argumentSchema } : null),
   };
@@ -718,6 +727,7 @@ export const createFateClient = (options: {
     persistence: options.persistence,
     roots,
     transport: createGraphQLTransport<GraphQLTransportMutations>({
+      ${graphQLConfig.byId ? 'byId: graphQL.byId,' : ''}
       decodeNodeId: options.decodeNodeId,
       encodeNodeId: options.encodeNodeId,
       eventSource: options.eventSource,
@@ -726,6 +736,7 @@ export const createFateClient = (options: {
       live: options.live,
       mutations: graphQL.mutations,
       mutateDurably: options.mutateDurably,
+      ${graphQLConfig.nodes !== undefined ? 'nodes: graphQL.nodes,' : ''}
       roots: graphQL.roots,
       ${argumentSchema ? 'schema: graphQL.schema,' : ''}
       types: ${typesBlock.trimStart()},
