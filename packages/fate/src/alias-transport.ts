@@ -93,11 +93,14 @@ const scopedArgs = (args: AnyRecord | undefined, group: Group): AnyRecord | unde
 
 const merge = (left: unknown, right: unknown): unknown => {
   if (Array.isArray(left) && Array.isArray(right)) {
+    const rightById = new Map<unknown, unknown>();
+    for (const entry of right) {
+      if (isRecord(entry) && entry.id !== undefined && !rightById.has(entry.id)) {
+        rightById.set(entry.id, entry);
+      }
+    }
     return left.map((item, index) => {
-      const match =
-        isRecord(item) && item.id !== undefined
-          ? right.find((entry) => isRecord(entry) && entry.id === item.id)
-          : right[index];
+      const match = isRecord(item) && item.id !== undefined ? rightById.get(item.id) : right[index];
       return match === undefined ? item : merge(item, match);
     });
   }

@@ -300,6 +300,35 @@ test('rejects unsupported multi-variant native mutations before executing them',
   expect(mutate).not.toHaveBeenCalled();
 });
 
+test('merges split alias reads by entity id even when list orders differ', async () => {
+  let call = 0;
+  const fetchQuery = vi.fn(async () =>
+    ++call === 1
+      ? {
+          rows: [
+            { id: '2', name: 'Two' },
+            { id: '1', name: 'One' },
+          ],
+        }
+      : {
+          rows: [
+            { id: '1', name: 'First' },
+            { id: '2', name: 'Second' },
+          ],
+        },
+  );
+  const transport = withAliasSupport({ fetchById: vi.fn(), fetchQuery });
+  await expect(
+    transport.fetchQuery?.('users', new Set(['rows.name', 'rows.label:name'])),
+  ).resolves.toEqual({
+    rows: [
+      { id: '2', 'label:name': 'Second', name: 'Two' },
+      { id: '1', 'label:name': 'First', name: 'One' },
+    ],
+  });
+  expect(fetchQuery).toHaveBeenCalledTimes(2);
+});
+
 test('lowers native live selection paths and projects updates back onto their aliases', () => {
   const unsubscribe = vi.fn();
   const subscribeById = vi.fn<NonNullable<Transport['subscribeById']>>(
