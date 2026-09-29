@@ -216,6 +216,15 @@ export const applyArgsPayloadToPlan = (plan: SelectionPlan, payload: ResolvedArg
       continue;
     }
     const cloned = cloneArgs(actual, path);
+    const prefix = path ? `${path}.` : '';
+    for (const childPath of plan.args.keys()) {
+      if (childPath !== path && childPath.startsWith(prefix)) {
+        const child = childPath.slice(prefix.length).split('.')[0];
+        if (!Object.hasOwn(entry.value, child)) {
+          delete cloned[child];
+        }
+      }
+    }
     const hash = hashArgs(cloned, { ignoreKeys: entry.ignoreKeys });
     plan.args.set(path, { hash, ignoreKeys: entry.ignoreKeys, value: cloned });
   }

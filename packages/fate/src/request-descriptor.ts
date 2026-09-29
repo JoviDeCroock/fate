@@ -137,12 +137,18 @@ const getRequestDescriptorKey = (items: ReadonlyArray<RequestItemDescriptor>): s
 
   for (const item of sorted) {
     if (item.kind === 'node') {
-      parts.push(`node:${item.name}:${item.viewSignature}:${item.ids[0]}`);
+      const args = resolvedArgsFromPlan(item.plan);
+      parts.push(
+        `node:${item.name}:${item.viewSignature}:${item.ids[0]}${args ? `:${hashArgs(args)}` : ''}`,
+      );
       continue;
     }
 
     if (item.kind === 'nodes') {
-      parts.push(`node:${item.name}:${item.viewSignature}:${item.ids.map(serializeId).join(',')}`);
+      const args = resolvedArgsFromPlan(item.plan);
+      parts.push(
+        `node:${item.name}:${item.viewSignature}:${item.ids.map(serializeId).join(',')}${args ? `:${hashArgs(args)}` : ''}`,
+      );
       continue;
     }
 

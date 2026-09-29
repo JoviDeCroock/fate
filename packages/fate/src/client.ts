@@ -12,6 +12,7 @@ import {
   getDeferredSelection,
   isDeferredSelection,
 } from './defer.ts';
+import { getFieldKey, getStoragePath } from './field-key.ts';
 import {
   decodeClientHydrationState,
   encodeHydrationValue,
@@ -1057,7 +1058,7 @@ export class FateClient<
 
     const plan = getSelectionPlan(view, ref);
     const selectedPaths = plan.paths;
-    const missing = this.store.missingForSelection(entityId, selectedPaths);
+    const missing = this.missingForSelection(entityId, selectedPaths, plan);
 
     const resolveSnapshot = () => {
       const resolvedView = this.readViewSelection<T, S>(view, ref, entityId, plan);
@@ -1088,7 +1089,10 @@ export class FateClient<
     }
 
     if (missing.size > 0) {
-      const key = this.pendingKey(entityId, missing);
+      const key = this.pendingKey(
+        entityId,
+        new Set([...missing].map((path) => getStoragePath(path, plan))),
+      );
 
       const pendingOptimistic = this.getPendingOptimisticMutations(entityId);
       if (pendingOptimistic) {
@@ -1131,7 +1135,7 @@ export class FateClient<
             key: `view:${key}`,
           };
           await persistence.restoreRequest(persistedRequest);
-          const remaining = this.store.missingForSelection(entityId, selectedPaths);
+          const remaining = this.missingForSelection(entityId, selectedPaths, plan);
           if (remaining.size) {
             await this.fetchByIdAndNormalize(type, [id], remaining, plan);
             persistence.fetched({
@@ -1147,7 +1151,7 @@ export class FateClient<
           await this.fetchByIdAndNormalize(type, [id], missing, plan);
         }
         try {
-          const remainingMissing = this.store.missingForSelection(entityId, selectedPaths);
+          const remainingMissing = this.missingForSelection(entityId, selectedPaths, plan);
 
           if (remainingMissing.size > 0) {
             this.stalledRequests.add(key);
@@ -1180,7 +1184,7 @@ export class FateClient<
     const ownerType = parsedOwner.type || metadata.type;
     const plan = getDeferredSelectionPlan(metadata.field, metadata.selection);
     const selectedPaths = plan.paths;
-    const missing = this.store.missingForSelection(resolvedOwner, selectedPaths);
+    const missing = this.missingForSelection(resolvedOwner, selectedPaths, plan);
     const hasMissingList = () =>
       this.hasMissingDeferredList(resolvedOwner, ownerType, metadata.field, plan);
     const listMissing = hasMissingList();
@@ -1247,7 +1251,7 @@ export class FateClient<
     const promise = this.trackPendingRequest(async () => {
       try {
         await this.fetchByIdAndNormalize(ownerType, [rawOwnerId], fetchPaths, plan);
-        const remainingMissing = this.store.missingForSelection(resolvedOwner, selectedPaths);
+        const remainingMissing = this.missingForSelection(resolvedOwner, selectedPaths, plan);
 
         if (remainingMissing.size > 0 || hasMissingList()) {
           this.stalledRequests.add(key);
@@ -2526,6 +2530,22 @@ export class FateClient<
     return this.createRequestDescriptor(request).key;
   }
 
+  private missingForSelection(
+    entityId: EntityId,
+    paths: Iterable<string>,
+    plan: SelectionPlan,
+  ): Set<string> {
+    if (!plan.args.size) {
+      return this.store.missingForSelection(entityId, paths);
+    }
+    const storagePaths = new Map([...paths].map((path) => [getStoragePath(path, plan), path]));
+    return new Set(
+      [...this.store.missingForSelection(entityId, storagePaths.keys())].map((path) =>
+        storagePaths.get(path)!,
+      ),
+    );
+  }
+
   private hasRootListData(item: ListRequestDescriptor): boolean {
     const listState = this.store.getListState(item.listKey);
     if (!listState) {
@@ -2541,7 +2561,7 @@ export class FateClient<
     }
 
     for (const id of listState.ids) {
-      if (this.store.missingForSelection(id, item.plan.paths).size > 0) {
+      if (this.missingForSelection(id, item.plan.paths, item.plan).size > 0) {
         return false;
       }
     }
@@ -2586,7 +2606,7 @@ export class FateClient<
         const fetchedIds: Array<string | number> = [];
         for (const raw of item.ids) {
           const entityId = toEntityId(item.type, raw);
-          const missing = this.store.missingForSelection(entityId, fields);
+          const missing = this.missingForSelection(entityId, fields, item.plan);
           if (fetchAll || missing.size > 0) {
             group.ids.push(raw);
             fetchedIds.push(raw);
@@ -2602,7 +2622,7 @@ export class FateClient<
           const entityId = this.rootRequests.get(item.queryKey);
           const missing =
             hasResult && entityId
-              ? this.store.missingForSelection(entityId, item.plan.paths)
+              ? this.missingForSelection(entityId, item.plan.paths, item.plan)
               : item.plan.paths;
 
           if (fetchAll || !hasResult || (entityId && missing.size > 0)) {
@@ -2667,7 +2687,7 @@ export class FateClient<
         const fields = item.plan.paths;
         for (const raw of item.ids) {
           const entityId = toEntityId(item.type, raw);
-          const missing = this.store.missingForSelection(entityId, fields);
+          const missing = this.missingForSelection(entityId, fields, item.plan);
           if (missing.size > 0) {
             return false;
           }
@@ -2680,7 +2700,7 @@ export class FateClient<
         const entityId = this.rootRequests.get(item.queryKey);
         const missing =
           hasResult && entityId
-            ? this.store.missingForSelection(entityId, item.plan.paths)
+            ? this.missingForSelection(entityId, item.plan.paths, item.plan)
             : item.plan.paths;
         if (!hasResult || (entityId && missing.size > 0)) {
           return false;
@@ -2881,11 +2901,12 @@ export class FateClient<
           const value = record[key];
           const fieldPath = pathPrefix ? `${pathPrefix}.${key}` : key;
           const fieldArgs = plan?.args.get(fieldPath);
+          const storageKey = getFieldKey(fieldPath, plan);
           if (relationDescriptor === 'scalar') {
             if (!Object.hasOwn(record, key)) {
               continue;
             }
-            result[key] = value;
+            result[storageKey] = value;
           } else if (
             relationDescriptor &&
             typeof relationDescriptor === 'object' &&
@@ -2893,7 +2914,7 @@ export class FateClient<
           ) {
             const childPaths = selectionTree.get(key) ?? emptySet;
             if (value === null) {
-              result[key] = null;
+              result[storageKey] = null;
               continue;
             }
             if (value && typeof value === 'object' && !isNodeRef(value)) {
@@ -2905,7 +2926,7 @@ export class FateClient<
                 );
               }
               const childId = toEntityId(childType, childConfig.getId(value));
-              result[key] = createNodeRef(childId);
+              result[storageKey] = createNodeRef(childId);
 
               this.writeEntity(childType, value as AnyRecord, childPaths, plan, fieldPath);
             }
@@ -2916,7 +2937,7 @@ export class FateClient<
           ) {
             const childPaths = selectionTree.get(key) ?? emptySet;
             if (value === null) {
-              result[key] = null;
+              result[storageKey] = null;
               continue;
             }
             const childType = relationDescriptor.listOf;
@@ -3017,9 +3038,9 @@ export class FateClient<
               );
 
               const listChanged = !areListStatesEqual(previousList, nextListState);
-              result[key] = createNodeRefsForIds(
+              result[storageKey] = createNodeRefsForIds(
                 nextListState.ids,
-                this.store.read(entityId)?.[key],
+                this.store.read(entityId)?.[storageKey],
                 {
                   reuseCurrentArray: !listChanged,
                 },
@@ -3028,19 +3049,24 @@ export class FateClient<
               this.store.setList(listKey, nextListState);
             }
           } else {
-            result[key] = value;
+            result[storageKey] = value;
           }
         }
       }
 
       for (const [key, value] of Object.entries(record)) {
         if (!(key in (config.fields ?? {}))) {
-          result[key] = value;
+          const fieldPath = pathPrefix ? `${pathPrefix}.${key}` : key;
+          result[getFieldKey(fieldPath, plan)] = value;
         }
       }
 
       this.viewDataCache.invalidate(entityId);
-      this.store.merge(entityId, result, select);
+      this.store.merge(
+        entityId,
+        result,
+        [...select].map((path) => getStoragePath(path, plan, pathPrefix ?? '')),
+      );
       this.linkParentLists(type, entityId, result, insert ?? 'after');
       if (!pathPrefix && insert) {
         this.insertIntoRootLists(type, entityId, insert);
@@ -3165,9 +3191,10 @@ export class FateClient<
         }
 
         const fieldPath = prefix ? `${prefix}.${key}` : key;
+        const storageKey = getFieldKey(fieldPath, plan);
         if (isDeferredSelection(selectionKind)) {
           const { id, type } = parseEntityId(parentId);
-          coverageById.set(parentId, (coverageById.get(parentId) ?? new Set()).add(key));
+          coverageById.set(parentId, (coverageById.get(parentId) ?? new Set()).add(storageKey));
           target[key] = createDeferred({
             field: key,
             id,
@@ -3178,11 +3205,11 @@ export class FateClient<
           continue;
         }
 
-        coverageById.set(parentId, (coverageById.get(parentId) ?? new Set()).add(key));
+        coverageById.set(parentId, (coverageById.get(parentId) ?? new Set()).add(storageKey));
 
         const selectionType = typeof selectionKind;
         if (selectionType === 'boolean' && selectionKind) {
-          target[key] = record[key];
+          target[key] = record[storageKey];
         } else if (selectionKind && selectionType === 'object') {
           const selectionValue = selectionKind as AnyRecord;
           const { args: selectionArgs, ...selectionWithoutArgs } = selectionValue;
@@ -3192,7 +3219,7 @@ export class FateClient<
             Object.keys(selectionWithoutArgs).length === 0;
 
           if (hasArgsOnly) {
-            target[key] = record[key];
+            target[key] = record[storageKey];
             continue;
           }
 
@@ -3204,7 +3231,7 @@ export class FateClient<
             ? selectionWithoutArgs
             : selectionValue;
 
-          const value = record[key];
+          const value = record[storageKey];
 
           if (value == null) {
             target[key] = null;
