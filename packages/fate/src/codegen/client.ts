@@ -418,7 +418,10 @@ const createGraphQLClientSource = ({
     Root ?? {},
   );
   const graphQLConfig = (moduleExports[graphQLConfigExportName] ?? {}) as {
-    mutations?: Record<string, { entity: string; field: string; inputArg?: false | string }>;
+    mutations?: Record<
+      string,
+      { entity: string; field: string; inputArg?: false | string; type?: string }
+    >;
     roots?: Record<string, { embedded?: boolean; field?: string; type?: string }>;
     schema?: string | GraphQLSchema;
     types?: ReadonlyArray<{ fields?: Record<string, any>; type: string }>;
@@ -518,6 +521,7 @@ ${Object.entries(argumentSchema.fields[type] ?? {})
     field: config.field,
     inputArg: config.inputArg,
     name,
+    type: config.type,
   }));
   const rootEntries = [
     ...byIdEntries.map(({ name, type }) => ({
@@ -592,12 +596,13 @@ ${Object.entries(argumentSchema.fields[type] ?? {})
     ]),
   );
   const graphQLMutations = Object.fromEntries(
-    mutationEntries.map(({ entity, field, inputArg, name }) => [
+    mutationEntries.map(({ entity, field, inputArg, name, type }) => [
       name,
       {
         entity,
         field,
         ...(inputArg !== undefined ? { inputArg } : null),
+        ...(type !== undefined ? { type } : null),
       },
     ]),
   );

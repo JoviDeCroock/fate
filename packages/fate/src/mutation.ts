@@ -55,6 +55,10 @@ export type MutationOptions<Identifier extends MutationIdentifier<any, any, any>
   optimistic?: OptimisticUpdate<MutationResult<Identifier>>;
   /** Skip durable delivery for this call, even when persistence is configured. */
   persist?: boolean;
+  /** Fields to select from a value mutation result. */
+  select?: {
+    [K in keyof NonNullable<MutationResult<Identifier>>]?: true | Record<string, unknown>;
+  };
   /** Optional view specifying which fields to select from the server. */
   view?: View<MutationEntity<Identifier>, Selection<MutationEntity<Identifier>>>;
 };
@@ -187,14 +191,14 @@ export function prepareMutation(
 ) {
   const { args, delete: deleteRecord, entity, input, insert, key, optimistic, plan } = command;
   if (!config) {
-    if (deleteRecord || optimistic || plan) {
+    if (deleteRecord || optimistic) {
       throw new Error(`fate: Value mutation '${key}' does not support entity updates.`);
     }
     return {
       commit: (_result: unknown) => {},
       entityId: null,
       execute: (identity?: MutationIdentity) =>
-        client.executeMutation(key, input, new Set(), { args, identity }),
+        client.executeMutation(key, input, plan?.paths ?? new Set(), { args, identity }),
       rollback: () => {},
     };
   }
@@ -271,6 +275,7 @@ export function wrapMutation<
     insert = 'after',
     optimistic,
     persist,
+    select,
     view,
   }: MutationOptions<I>) => {
     const command: MutationCommand = {
@@ -281,7 +286,11 @@ export function wrapMutation<
       insert,
       key: identifier.key,
       optimistic: optimistic as AnyRecord | undefined,
-      plan: view ? getSelectionPlan(view, null) : undefined,
+      plan: view
+        ? getSelectionPlan(view, null)
+        : select
+          ? getSelectionPlan(select as View<any, any>, null)
+          : undefined,
     };
     if (client.persistence && persist !== false) {
       try {

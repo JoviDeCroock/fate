@@ -54,6 +54,7 @@ export type GraphQLMutationDefinition<
   entity: T['__typename'];
   field: string;
   inputArg?: false | string;
+  type?: string;
 }>;
 
 export type GraphQLMutationInput<Definition> =
@@ -76,6 +77,7 @@ type GraphQLMutationRuntimeConfig = {
   entity: string;
   field: string;
   inputArg?: false | string;
+  type?: string;
 };
 
 type GraphQLLiveOptions = {
@@ -647,8 +649,13 @@ export function graphqlMutation<T extends Entity, Input, Output>(
 export function graphqlValueMutation<Input, Output>(options: {
   field: string;
   inputArg?: false | string;
+  type?: string;
 }): GraphQLMutationDefinition<{ __typename: '__value__' }, Input, Output> {
-  return graphqlMutation<{ __typename: '__value__' }, Input, Output>('__value__', options);
+  return Object.freeze({ entity: '__value__', ...options }) as GraphQLMutationDefinition<
+    { __typename: '__value__' },
+    Input,
+    Output
+  >;
 }
 
 export function createGraphQLTransport<
@@ -923,14 +930,15 @@ export function createGraphQLTransport<
           ? ((mutationInput ?? {}) as Record<string, unknown>)
           : { [mutation.inputArg ?? 'input']: mutationInput };
       const selection =
-        mutation.entity === '__value__'
+        mutation.entity === '__value__' && !mutation.type
           ? ''
           : buildRecordSelection({
               args: isRecord(selectionArgs) ? selectionArgs : undefined,
               argumentsForField,
+              embedded: mutation.entity === '__value__',
               path: '',
               select,
-              type: mutation.entity,
+              type: mutation.type ?? mutation.entity,
               types,
             });
 

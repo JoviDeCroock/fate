@@ -65,6 +65,32 @@ test('generates an ID-less object root as a cached value root', () => {
   expect(source).not.toContain('import type { Price');
 });
 
+test('generates ID-less object mutation selections', () => {
+  const source = createClientSource({
+    moduleExports: {
+      fateGraphQL: {
+        mutations: {
+          checkout: graphqlValueMutation<{ id: string }, { approved: boolean }>({
+            field: 'checkout',
+            inputArg: false,
+            type: 'Checkout',
+          }),
+        },
+        schema:
+          'type Query { origin: Boolean! } type Mutation { checkout(id: ID!): Checkout } type Checkout { approved: Boolean! }',
+        types: [{ type: 'Checkout' }],
+      },
+      Root: {},
+    },
+    moduleName: '@org/shop',
+    transport: 'graphql',
+  });
+
+  expect(source).toContain("'checkout': valueMutation<");
+  expect(source).toContain('"type": "Checkout"');
+  expect(source).toContain("type: 'Checkout'");
+});
+
 test('generates the same client source for the Prisma and Drizzle examples', async () => {
   setExampleEnv();
 

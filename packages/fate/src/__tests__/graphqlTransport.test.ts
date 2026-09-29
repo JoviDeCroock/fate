@@ -199,6 +199,50 @@ test('fetches and caches ID-less object query roots with nested selections', asy
   expect(fetch).toHaveBeenCalledTimes(1);
 });
 
+test('returns selected ID-less object mutation payloads', async () => {
+  const schema = buildSchema(
+    `type Query { origin: Boolean! } type Mutation { checkout(id: ID!): Checkout } type Checkout { approved: Boolean! receipt: Receipt } type Receipt { code: String! }`,
+  );
+  const fetch = vi.fn(async () =>
+    jsonResponse({ data: { f1: { approved: true, receipt: { code: 'ok' } } } }),
+  );
+  const transport = createGraphQLTransport<{
+    checkout: { input: { id: string }; output: { approved: boolean; receipt: { code: string } } };
+  }>({
+    fetch,
+    live: false,
+    mutations: {
+      checkout: { entity: '__value__', field: 'checkout', inputArg: false, type: 'Checkout' },
+    },
+    schema: createGraphQLArgumentSchema(schema),
+    types: [
+      { fields: { receipt: { embedded: 'Receipt' } }, type: 'Checkout' },
+      { type: 'Receipt' },
+    ],
+    url: '/graphql',
+  });
+  const roots = {};
+  const mutations = {
+    checkout: valueMutation<{ id: string }, { approved: boolean; receipt: { code: string } }>(),
+  };
+  const client = createClient<[typeof roots, typeof mutations]>({
+    mutations,
+    roots,
+    transport,
+    types: [],
+  });
+
+  await expect(
+    client.mutations.checkout({
+      input: { id: '1' },
+      select: { approved: true, receipt: { code: true } },
+    }),
+  ).resolves.toEqual({ error: undefined, result: { approved: true, receipt: { code: 'ok' } } });
+  const query = getRequestBody(fetch).query;
+  expect(validate(schema, parse(query))).toEqual([]);
+  expect(query).toContain('receipt { code }');
+});
+
 test('fetches nodes through the Relay nodes field and decodes global ids', async () => {
   const fetch = vi.fn(async () =>
     jsonResponse({
