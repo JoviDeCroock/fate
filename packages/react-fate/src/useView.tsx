@@ -64,7 +64,6 @@ export function useView<V extends View<any, any>>(
 ): ViewData<ViewEntityWithTypename<V>, ViewSelection<V>> | null | undefined {
   const client = useFateClient();
   const isDeferredRef = isDeferred(ref);
-  const snapshotRef = useRef<ViewSnapshot<ViewEntity<V>, V[ViewTag]['select']> | null>(null);
   const mergedSnapshotRef = useRef<{
     cacheKey: unknown;
     resolvedKey: string | null;
@@ -100,7 +99,6 @@ export function useView<V extends View<any, any>>(
             cached.cacheKey === cacheKey &&
             cached.resolvedKey === resolvedKey
           ) {
-            snapshotRef.current = cached.thenable.value;
             return cached.thenable;
           }
 
@@ -112,34 +110,27 @@ export function useView<V extends View<any, any>>(
             source: snapshot.value,
             thenable,
           };
-          snapshotRef.current = value;
           return thenable;
         }
 
         mergedSnapshotRef.current = null;
-        const value = snapshot.value;
-        snapshotRef.current = value;
         return snapshot;
       }
 
       mergedSnapshotRef.current = null;
-      snapshotRef.current = null;
       if (!coverage.length) {
         return snapshot;
       }
 
-      return Promise.resolve(snapshot).then((value) => {
-        const resolved = mergeCoverage(value);
-        snapshotRef.current = resolved;
-        return resolved;
-      });
+      return Promise.resolve(snapshot).then(mergeCoverage);
     },
     [client, view],
   );
 
-  const getSnapshot = useCallback(() => {
+  const getSnapshot = useCallback((): PromiseLike<
+    ViewSnapshot<ViewEntity<V>, V[ViewTag]['select']> | null | undefined
+  > => {
     if (ref == null) {
-      snapshotRef.current = null;
       return ref === undefined ? undefinedSnapshot : nullSnapshot;
     }
 
@@ -154,11 +145,10 @@ export function useView<V extends View<any, any>>(
       const resolvedRef = deferredSnapshot.value.data;
       pendingRef.current = null;
       if (resolvedRef === null) {
-        snapshotRef.current = {
+        return fulfilledThenable({
           coverage: deferredSnapshot.value.coverage,
           data: null as unknown as ViewData<ViewEntity<V>, V[ViewTag]['select']>,
-        };
-        return fulfilledThenable(snapshotRef.current);
+        });
       }
 
       return readViewSnapshot(
@@ -172,28 +162,20 @@ export function useView<V extends View<any, any>>(
       return pendingRef.current.viewSnapshot;
     }
 
-    snapshotRef.current = null;
     const viewSnapshot = Promise.resolve(deferredSnapshot).then((deferredValue) => {
       const resolvedRef = deferredValue.data;
       if (resolvedRef === null) {
-        const value = {
+        return {
           coverage: deferredValue.coverage,
           data: null as unknown as ViewData<ViewEntity<V>, V[ViewTag]['select']>,
         };
-        snapshotRef.current = value;
-        return value;
       }
 
-      return Promise.resolve(
-        readViewSnapshot(
-          client.ref(resolvedRef.__typename, resolvedRef.id, resolveView(view, resolvedRef)),
-          deferredValue.coverage,
-          deferred,
-        ),
-      ).then((value) => {
-        snapshotRef.current = value;
-        return value;
-      });
+      return readViewSnapshot(
+        client.ref(resolvedRef.__typename, resolvedRef.id, resolveView(view, resolvedRef)),
+        deferredValue.coverage,
+        deferred,
+      );
     });
 
     pendingRef.current = {
@@ -207,15 +189,16 @@ export function useView<V extends View<any, any>>(
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
       if (ref == null) {
-        snapshotRef.current = null;
         return () => {};
       }
 
       const subscriptions = new Map<EntityId, () => void>();
+      let disposed = false;
+      let pendingSnapshot: PromiseLike<unknown> | null = null;
 
       const onChange = () => {
-        onStoreChange();
         updateSubscriptions();
+        onStoreChange();
       };
 
       const subscribe = (entityId: EntityId, paths: ReadonlySet<string>) => {
@@ -234,25 +217,49 @@ export function useView<V extends View<any, any>>(
       };
 
       const updateSubscriptions = () => {
-        if (snapshotRef.current) {
-          for (const [entityId, paths] of snapshotRef.current.coverage) {
+        const snapshot = getSnapshot();
+        if (!isFulfilledThenable(snapshot)) {
+          if (pendingSnapshot !== snapshot) {
+            pendingSnapshot = snapshot;
+            // Refresh coverage when loading finishes, even if no entity was
+            // available to subscribe to when this subscription started.
+            Promise.resolve(snapshot).then(
+              () => {
+                if (!disposed && pendingSnapshot === snapshot) {
+                  onChange();
+                }
+              },
+              () => {
+                if (!disposed && pendingSnapshot === snapshot) {
+                  onStoreChange();
+                }
+              },
+            );
+          }
+          return;
+        }
+
+        pendingSnapshot = null;
+        if (snapshot.value) {
+          for (const [entityId, paths] of snapshot.value.coverage) {
             subscribe(entityId, paths);
           }
 
-          cleanup(new Set(snapshotRef.current.coverage.map(([id]) => id)));
+          cleanup(new Set(snapshot.value.coverage.map(([id]) => id)));
         }
       };
 
       updateSubscriptions();
 
       return () => {
+        disposed = true;
         for (const unsubscribe of subscriptions.values()) {
           unsubscribe();
         }
         subscriptions.clear();
       };
     },
-    [client.store, ref],
+    [client.store, getSnapshot, ref],
   );
 
   const snapshot = use(

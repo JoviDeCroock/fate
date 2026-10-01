@@ -2,7 +2,7 @@
  * @vitest-environment happy-dom
  */
 
-import { createClient, FateRoots, mutation, view, type Transport } from '@nkzw/fate';
+import { createClient, FateRoots, mutation, view, type Transport, type ViewRef } from '@nkzw/fate';
 import { act, StrictMode, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, test, vi } from 'vite-plus/test';
@@ -175,6 +175,66 @@ test('updates when an entity added to a nested list changes', async () => {
     );
   });
   expect(container.textContent).toBe('Banana');
+});
+
+test('updates after switching to a ref that was not cached yet', async () => {
+  const { promise, resolve } = Promise.withResolvers<Array<Partial<Post>>>();
+  const client = createClient({
+    roots: {},
+    transport: {
+      fetchById: vi.fn(() => promise),
+    },
+    types: [{ type: 'Post' }],
+  });
+
+  const PostView = view<Post>()({
+    content: true,
+    id: true,
+  });
+
+  client.write(
+    'Post',
+    { __typename: 'Post', content: 'Apple', id: 'post-1' },
+    new Set(['content', 'id']),
+  );
+
+  const Component = ({ postRef }: { postRef: ViewRef<'Post'> }) => {
+    const post = useView(PostView, postRef);
+    return <span>{post.content}</span>;
+  };
+
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  const render = (id: string) =>
+    act(async () => {
+      root.render(
+        <FateClient client={client}>
+          <Suspense fallback={null}>
+            <Component postRef={client.ref<Post>('Post', id, PostView)} />
+          </Suspense>
+        </FateClient>,
+      );
+    });
+
+  await render('post-1');
+  expect(container.textContent).toBe('Apple');
+
+  await render('post-2');
+  expect(container.textContent).toBe('Apple');
+
+  await act(async () => {
+    resolve([{ __typename: 'Post', content: 'Banana', id: 'post-2' }]);
+  });
+  expect(container.textContent).toBe('Banana');
+
+  await act(async () => {
+    client.write(
+      'Post',
+      { __typename: 'Post', content: 'Kiwi', id: 'post-2' },
+      new Set(['content']),
+    );
+  });
+  expect(container.textContent).toBe('Kiwi');
 });
 
 test('only updates components that match the selection', () => {
