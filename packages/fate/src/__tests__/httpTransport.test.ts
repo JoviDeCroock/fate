@@ -334,6 +334,57 @@ test('handles named native SSE live entity events emitted by the server', async 
   dispose?.();
 });
 
+test('closes the native SSE stream without unsubscribing from a closed connection', async () => {
+  const fetch = vi.fn(async () =>
+    jsonResponse({
+      results: [{ data: null, id: '1', ok: true }],
+      version: 1,
+    }),
+  );
+  const transport = createHTTPTransport<{ mutations: Record<never, never> }>({
+    eventSource: resetMockEventSource(),
+    fetch,
+    url: 'http://local/fate',
+  });
+  const handlers = { onData: vi.fn(), onError: vi.fn() };
+
+  const disposeA = transport.subscribeById?.('Post', '1', new Set(['id']), undefined, handlers);
+  const disposeB = transport.subscribeById?.('Post', '2', new Set(['id']), undefined, handlers);
+  const source = await openLiveStream();
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+
+  const operations = () =>
+    (fetch.mock.calls as unknown as Array<[string, RequestInit]>).flatMap(
+      ([, init]) => JSON.parse(String(init.body)).operations,
+    );
+
+  disposeA?.();
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
+  expect(operations()[2]).toMatchObject({ kind: 'unsubscribe' });
+  expect(source.closed).toBe(false);
+
+  // Removing the last subscription closes the stream, which ends every
+  // subscription on the server; the connection is gone for later requests.
+  disposeB?.();
+  expect(source.closed).toBe(true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(fetch).toHaveBeenCalledTimes(3);
+  expect(handlers.onError).not.toHaveBeenCalled();
+
+  // Disposing two subscriptions in the same tick closes the stream too.
+  const disposeC = transport.subscribeById?.('Post', '3', new Set(['id']), undefined, handlers);
+  const disposeD = transport.subscribeById?.('Post', '4', new Set(['id']), undefined, handlers);
+  await vi.waitFor(() => expect(MockEventSource.instances).toHaveLength(2));
+  MockEventSource.instances[1]!.emit('open');
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(5));
+  disposeC?.();
+  disposeD?.();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(MockEventSource.instances[1]!.closed).toBe(true);
+  expect(fetch).toHaveBeenCalledTimes(5);
+  expect(handlers.onError).not.toHaveBeenCalled();
+});
+
 test('handles named native SSE live connection events emitted by the server', async () => {
   const fetch = vi.fn(async () =>
     jsonResponse({

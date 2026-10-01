@@ -455,6 +455,9 @@ export function createHTTPTransport<
         FateLiveConnectionSubscribeOperation | FateLiveSubscribeOperation
       >();
       const lastEventIds = new Map<string, string>();
+      // Closing the stream ends all of its subscriptions on the server, which
+      // then rejects requests for this connection.
+      let closed = false;
       let opened = false;
       let resolveOpen: (() => void) | undefined;
       let rejectOpen: ((error: Error | Event) => void) | undefined;
@@ -565,7 +568,7 @@ export function createHTTPTransport<
         add(operation) {
           operations.set(operation.id, operation);
           void open
-            .then(() => control([withLastEventId(operation)]))
+            .then(() => (closed ? undefined : control([withLastEventId(operation)])))
             .catch((error) => {
               operations.delete(operation.id);
               liveSubscriptions.delete(operation.id);
@@ -575,20 +578,25 @@ export function createHTTPTransport<
         remove(id) {
           operations.delete(id);
           lastEventIds.delete(id);
-          void open
-            .then(() =>
-              control([
-                {
-                  id,
-                  kind: 'unsubscribe',
-                },
-              ]),
-            )
-            .catch(reportError);
           if (operations.size === 0) {
+            closed = true;
             source.close();
             nativeLiveClient = undefined;
+            return;
           }
+
+          void open
+            .then(() =>
+              closed
+                ? undefined
+                : control([
+                    {
+                      id,
+                      kind: 'unsubscribe',
+                    },
+                  ]),
+            )
+            .catch(reportError);
         },
       };
 
