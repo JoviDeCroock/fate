@@ -367,8 +367,9 @@ type EntityName<T> = T extends { __typename: infer N extends string } ? N : neve
 
 /** Recursively applies a view selection to an entity to mask fields that aren't selected. */
 type ConditionalMask<C extends boolean, Value> = C extends true ? Value : undefined;
-type MaskSelectionEntry<T, K, S> =
-  S extends ConditionalSelection<infer C, infer Value>
+type MaskSelectionEntry<T, K, S> = [S] extends [never]
+  ? NonNullish<T>[Extract<K, keyof T>]
+  : S extends ConditionalSelection<infer C, infer Value>
     ? ConditionalMask<C, MaskSelectionEntry<T, K, Value>>
     : S extends AliasedView<infer V>
       ? ViewRef<ViewEntityName<V>>

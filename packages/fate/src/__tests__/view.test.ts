@@ -1,6 +1,6 @@
 import { expect, expectTypeOf, test, vi } from 'vite-plus/test';
 import { getViewTag, SelectionOf, type View, type ViewData, type ViewRef } from '../types.ts';
-import { view } from '../view.ts';
+import { getViewPayloads, view } from '../view.ts';
 
 type Post = {
   __typename: 'Post';
@@ -207,6 +207,31 @@ test('preserves nullability when selecting views', () => {
   type PostData = ViewData<PostWithCategory, SelectionOf<typeof PostView>>;
 
   expectTypeOf<PostData['category']>().toEqualTypeOf<ViewRef<'Category'> | null>();
+});
+
+test('preserves embedded object types for legacy whole-field selections', () => {
+  type UserDetail = {
+    __typename: 'UserDetail';
+    id: string;
+    usage: { totalRequests: number } | null;
+    user: { id: string; login: string; plan: 'free' | 'pro' };
+  };
+
+  const LegacyUserDetailView = view<UserDetail>()({
+    id: true,
+    usage: true as never,
+    user: true as never,
+  });
+  type LegacyUserDetailData = ViewData<UserDetail, SelectionOf<typeof LegacyUserDetailView>>;
+
+  expect(getViewPayloads(LegacyUserDetailView, null)[0]?.select).toEqual({
+    id: true,
+    usage: true,
+    user: true,
+  });
+  expectTypeOf<LegacyUserDetailData['id']>().toEqualTypeOf<string>();
+  expectTypeOf<LegacyUserDetailData['user']>().toEqualTypeOf<UserDetail['user']>();
+  expectTypeOf<LegacyUserDetailData['usage']>().toEqualTypeOf<UserDetail['usage']>();
 });
 
 test('rejects selecting fields not defined on the entity', () => {
