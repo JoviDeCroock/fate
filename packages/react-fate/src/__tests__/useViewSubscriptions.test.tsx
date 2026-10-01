@@ -1,6 +1,6 @@
 /** @vitest-environment happy-dom */
 
-import { createClient, defer, toEntityId, view, type ViewRef } from '@nkzw/fate';
+import { clientRoot, createClient, defer, toEntityId, view, type ViewRef } from '@nkzw/fate';
 import { act, Component as ReactComponent, StrictMode, Suspense, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, test, vi } from 'vite-plus/test';
@@ -12,6 +12,16 @@ global.IS_REACT_ACT_ENVIRONMENT = true;
 
 type User = { __typename: 'User'; id: string; name: string };
 type Post = { __typename: 'Post'; author: User; content: string; id: string };
+
+class ErrorBoundary extends ReactComponent<{ children: ReactNode }, { error: Error | null }> {
+  override state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  override render() {
+    return this.state.error ? <span>{this.state.error.message}</span> : this.props.children;
+  }
+}
 
 test.each([
   [false, false],
@@ -166,15 +176,6 @@ test('reports a rejected pending read to an error boundary', async () => {
     { __typename: 'Post', content: 'Apple', id: 'post-1' },
     new Set(['content', 'id']),
   );
-  class ErrorBoundary extends ReactComponent<{ children: ReactNode }, { error: Error | null }> {
-    override state = { error: null as Error | null };
-    static getDerivedStateFromError(error: Error) {
-      return { error };
-    }
-    override render() {
-      return this.state.error ? <span>{this.state.error.message}</span> : this.props.children;
-    }
-  }
   const Component = ({ postRef }: { postRef: ViewRef<'Post'> }) => (
     <span>{useView(PostView, postRef).content}</span>
   );
@@ -197,6 +198,47 @@ test('reports a rejected pending read to an error boundary', async () => {
     await render('post-2');
     await act(async () => request.reject(new Error('Request failed')));
     expect(container.textContent).toBe('Request failed');
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+test('reports synchronous cache-only snapshot errors to an error boundary after a write', async () => {
+  const fetchById = vi.fn(async () => []);
+  const roots = { viewer: clientRoot<User, 'User'>('User') };
+  const client = createClient<[typeof roots, Record<never, never>]>({
+    roots,
+    transport: { fetchById },
+    types: [{ type: 'User' }],
+  });
+  const UserView = view<User>()({ id: true, name: true });
+  client.write('User', { id: '1', name: 'Apple' }, new Set(['id', 'name']));
+  const observer = client.observeRequest(
+    { viewer: { id: '1', view: UserView } },
+    { mode: 'cache-only' },
+  );
+  const userRef = observer.getSnapshot().data!.viewer;
+  const Component = () => <span>{useView(UserView, userRef).name}</span>;
+  const container = document.createElement('div');
+  const root = createRoot(container, { onCaughtError: vi.fn() });
+  try {
+    await act(async () => {
+      root.render(
+        <ErrorBoundary>
+          <FateClient client={client}>
+            <Component />
+          </FateClient>
+        </ErrorBoundary>,
+      );
+    });
+    expect(container.textContent).toBe('Apple');
+    await act(async () => {
+      client.deleteRecord('User', '1');
+      // Recreate only the name's coverage, leaving the selected id missing.
+      client.write('User', { id: '1', name: 'Kiwi' }, new Set(['name']));
+    });
+    expect(container.textContent).toContain('Cache-only view');
+    expect(fetchById).not.toHaveBeenCalled();
   } finally {
     await act(async () => root.unmount());
   }

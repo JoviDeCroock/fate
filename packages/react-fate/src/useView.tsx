@@ -197,7 +197,12 @@ export function useView<V extends View<any, any>>(
       let pendingSnapshot: PromiseLike<unknown> | null = null;
 
       const onChange = () => {
-        updateSubscriptions();
+        try {
+          updateSubscriptions();
+        } catch {
+          // React must read the snapshot error itself so an error boundary can
+          // handle it, including when this callback runs after a pending read.
+        }
         onStoreChange();
       };
 
