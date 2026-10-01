@@ -193,7 +193,16 @@ type LiveConnectionPayload =
 
 const defaultFetch: FetchLike = (input, init) => globalThis.fetch(input, init);
 
-const importGraphQLSSE = () => import('graphql-sse') as Promise<GraphQLSSEModule>;
+const importGraphQLSSE = async (): Promise<GraphQLSSEModule> => {
+  try {
+    return (await import('graphql-sse')) as GraphQLSSEModule;
+  } catch (error) {
+    throw new Error(
+      "fate(graphql): GraphQL live queries require the optional 'graphql-sse' package. Install it or pass live: false.",
+      { cause: error },
+    );
+  }
+};
 
 const normalizeEndpoint = (url: string | URL): string => String(url).replace(/\/$/, '');
 
@@ -1057,16 +1066,7 @@ export function createGraphQLTransport<
         return graphQLLiveClient;
       }
 
-      let graphQLSSE: GraphQLSSEModule;
-      try {
-        graphQLSSE = await (graphQLSSEModule ??= importGraphQLSSE());
-      } catch (error) {
-        throw new Error(
-          "fate(graphql): GraphQL live queries require the optional 'graphql-sse' package. Install it or pass live: false.",
-          { cause: error },
-        );
-      }
-
+      const graphQLSSE = await (graphQLSSEModule ??= importGraphQLSSE());
       const { createClient } = graphQLSSE;
       return (graphQLLiveClient ??= createClient({
         credentials: liveOptions.withCredentials === false ? 'same-origin' : 'include',
