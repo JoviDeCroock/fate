@@ -13,7 +13,7 @@ import {
   ViewSnapshot,
   ViewTag,
 } from '@nkzw/fate';
-import { use, useCallback, useDeferredValue, useRef, useSyncExternalStore } from 'react';
+import { use, useCallback, useDeferredValue, useEffect, useRef, useSyncExternalStore } from 'react';
 import { useFateClient } from './context.tsx';
 import { fulfilledThenable, isFulfilledThenable } from './thenable.ts';
 
@@ -76,6 +76,7 @@ export function useView<V extends View<any, any>>(
     snapshot: PromiseLike<unknown>;
     viewSnapshot: PromiseLike<ViewSnapshot<ViewEntity<V>, V[ViewTag]['select']> | null>;
   } | null>(null);
+  const updateSubscriptionsRef = useRef<(() => void) | null>(null);
 
   const readViewSnapshot = useCallback(
     (
@@ -244,8 +245,10 @@ export function useView<V extends View<any, any>>(
       };
 
       updateSubscriptions();
+      updateSubscriptionsRef.current = updateSubscriptions;
 
       return () => {
+        updateSubscriptionsRef.current = null;
         for (const unsubscribe of subscriptions.values()) {
           unsubscribe();
         }
@@ -258,6 +261,13 @@ export function useView<V extends View<any, any>>(
   const snapshot = use(
     useDeferredValue(useSyncExternalStore(subscribe, getSnapshot, getSnapshot)),
   ) as ViewSnapshot<ViewEntity<V>, ViewSelection<V>> | null | undefined;
+
+  // `subscribe` only runs when the ref changes. If the new ref's data was still
+  // loading at that point, its coverage is only known once the resolved
+  // snapshot commits.
+  useEffect(() => {
+    updateSubscriptionsRef.current?.();
+  }, [snapshot]);
 
   return snapshot ? snapshot.data : snapshot;
 }
