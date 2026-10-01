@@ -35,6 +35,24 @@ test('older overlapping responses preserve newer fields and still fill disjoint 
   expect(client.store.read('User:1')).toMatchObject({ bio: 'Biography', name: 'New' });
 });
 
+test('an omitted selected field in a newer response cannot be filled by an older response', async () => {
+  const { client, pending, start } = setup();
+  const older = start(true);
+  const newer = client.request(
+    { viewer: { view: view<User>()({ bio: true, id: true }) } },
+    { mode: 'network-only' },
+  );
+  await vi.waitFor(() => expect(pending).toHaveLength(2));
+  pending[1]({ id: '1' });
+  await newer;
+  pending[0]({ bio: 'Old biography', id: '1', name: 'Name' });
+  await older;
+
+  expect(client.store.read('User:1')).toMatchObject({ id: '1', name: 'Name' });
+  expect(client.store.read('User:1')?.bio).toBeUndefined();
+  expect(client.store.missingForSelection('User:1', ['bio'])).toEqual(new Set());
+});
+
 test('older nullable root results cannot erase a newer root result', async () => {
   const { client, pending, start } = setup();
   const older = start(true);

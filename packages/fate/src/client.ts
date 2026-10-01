@@ -3575,16 +3575,23 @@ export class FateClient<
         }
       }
 
+      const selectedPaths: Array<string> = [];
+      for (const path of select) {
+        const storagePath = getStoragePath(path, plan, pathPrefix ?? '');
+        const storageKey = storagePath.split('.')[0];
+        // JSON omits selected undefined fields; they still have coverage unless
+        // a newer write has superseded this response.
+        if (
+          Object.hasOwn(result, storageKey) ||
+          (!Object.hasOwn(record, path.split('.')[0]) &&
+            this.acceptWrite(JSON.stringify([entityId, storageKey]), generation))
+        ) {
+          selectedPaths.push(storagePath);
+        }
+      }
+
       this.viewDataCache.invalidate(entityId);
-      this.withWriteGeneration(generation, () =>
-        this.store.merge(
-          entityId,
-          result,
-          [...select]
-            .map((path) => getStoragePath(path, plan, pathPrefix ?? ''))
-            .filter((path) => Object.hasOwn(result, path.split('.')[0])),
-        ),
-      );
+      this.withWriteGeneration(generation, () => this.store.merge(entityId, result, selectedPaths));
       this.linkParentLists(type, entityId, result, insert ?? 'after');
       if (!pathPrefix && insert) {
         this.insertIntoRootLists(type, entityId, insert);
