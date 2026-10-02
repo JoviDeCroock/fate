@@ -326,6 +326,103 @@ test('deferred connection fields suspend inside their own boundary', async () =>
   expect(container.textContent).toBe('AppleBanana');
 });
 
+test('switching a rendered list view to a pending deferred connection keeps component state', async () => {
+  const pending = Promise.withResolvers<void>();
+  const fetchById = vi.fn(
+    async (_type: string, ids: Array<string | number>, select: Set<string>) => {
+      const withComments = [...select].some((path) => path.startsWith('comments.'));
+      if (withComments && ids.includes('post-2')) {
+        await pending.promise;
+      }
+      return ids.map((id) => ({
+        __typename: 'Post',
+        content: `Content ${id}`,
+        id,
+        ...(withComments
+          ? { comments: [{ __typename: 'Comment', content: `Comment ${id}`, id: `comment-${id}` }] }
+          : null),
+      }));
+    },
+  );
+
+  const roots = {
+    first: clientRoot('Post'),
+    second: clientRoot('Post'),
+  };
+  const client = createClient({
+    roots,
+    transport: { fetchById },
+    types: [
+      { fields: { comments: { listOf: 'Comment' }, content: 'scalar' }, type: 'Post' },
+      { fields: { content: 'scalar' }, type: 'Comment' },
+    ],
+  });
+
+  const PostView = view<PostWithComments>()({
+    comments: defer(DeferredCommentConnectionView),
+    content: true,
+    id: true,
+  });
+
+  let setCount!: (count: number) => void;
+  const Counter = () => {
+    const [count, set] = useState(0);
+    setCount = set;
+    return <span>{`count:${count} `}</span>;
+  };
+
+  let select!: (key: 'first' | 'second') => void;
+  const Component = () => {
+    const request = {
+      first: { id: 'post-1', view: PostView },
+      second: { id: 'post-2', view: PostView },
+    };
+    const posts = useRequest<typeof request, typeof roots>(request);
+    const first = useView(PostView, posts.first);
+    const second = useView(PostView, posts.second);
+    const [selected, setSelected] = useState<'first' | 'second'>('first');
+    select = setSelected;
+    return (
+      <Suspense fallback={<span>Loading comments</span>}>
+        <Counter />
+        <DeferredComments comments={(selected === 'first' ? first : second).comments} />
+      </Suspense>
+    );
+  };
+
+  const container = document.createElement('div');
+  const reactRoot = createRoot(container);
+
+  await act(async () => {
+    reactRoot.render(
+      <FateClient client={client}>
+        <Suspense fallback={null}>
+          <Component />
+        </Suspense>
+      </FateClient>,
+    );
+    await flushAsync();
+  });
+
+  await act(async () => {
+    setCount(7);
+    await flushAsync();
+  });
+  expect(container.textContent).toBe('count:7 Comment post-1');
+
+  await act(async () => {
+    select('second');
+    await flushAsync();
+  });
+  expect(container.textContent).toBe('Loading comments');
+
+  await act(async () => {
+    pending.resolve();
+    await flushAsync();
+  });
+  expect(container.textContent).toBe('count:7 Comment post-2');
+});
+
 test('deferred entity fields resolve through useView inside their own boundary', async () => {
   const author = Promise.withResolvers<Array<unknown>>();
   const fetchById = vi.fn((_type: string, _ids: Array<string | number>, select: Set<string>) => {

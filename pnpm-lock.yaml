@@ -909,8 +909,8 @@ importers:
         specifier: workspace:*
         version: link:../fate
       preact-suspense:
-        specifier: ^0.3.1
-        version: 0.3.1(preact@11.0.0)
+        specifier: ^0.3.2
+        version: 0.3.2(preact@11.0.0)
     devDependencies:
       preact:
         specifier: 11.0.0
@@ -5953,8 +5953,8 @@ packages:
     peerDependencies:
       preact: '>=10 || >= 11.0.0-0'
 
-  preact-suspense@0.3.1:
-    resolution: {integrity: sha512-cBGRLc6jtB5SJqOKr1DG0Di/r/64Fx9PcuAC7bOx0hG1ztIfGxomwUtElpJLcn4bABkETdHCe7Cq3OI28NfFjg==}
+  preact-suspense@0.3.2:
+    resolution: {integrity: sha512-xoxhzj2kGYiqQGB+TykY1FzuE8aN4J77j7CeI+eUo72x3hQ8lmJ8BiuAC5fIl/ibvPg/sUmqyQgpPOsh6phMpQ==}
     peerDependencies:
       preact: ^10.0.0 || ^11.0.0-0
 
@@ -10745,7 +10745,7 @@ snapshots:
     dependencies:
       preact: 11.0.0(preact-render-to-string@6.7.0)
 
-  preact-suspense@0.3.1(preact@11.0.0):
+  preact-suspense@0.3.2(preact@11.0.0):
     dependencies:
       preact: 11.0.0(preact-render-to-string@6.7.0)
 

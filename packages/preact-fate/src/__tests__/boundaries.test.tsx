@@ -5,7 +5,7 @@
 import { clientRoot, createClient, view } from '@nkzw/fate';
 import { Component, type ComponentChildren } from 'preact';
 import { expect, test, vi } from 'vite-plus/test';
-import { FateClient, Suspense, useRequest, useView } from '../index.ts';
+import { FateClient, lazy, Suspense, useRequest, useView } from '../index.ts';
 import { act, createRoot } from './preact.ts';
 
 type Post = { __typename: 'Post'; content: string; id: string };
@@ -55,5 +55,34 @@ test('error boundaries inside Suspense do not catch pending fate data', async ()
   const afterLoad = container.textContent;
 
   expect({ afterLoad, whileLoading }).toEqual({ afterLoad: 'Post 1', whileLoading: 'loading' });
+  await act(async () => root.unmount());
+});
+
+test('failed lazy imports reach the error boundary', async () => {
+  const { promise, reject } = Promise.withResolvers<{ default: () => string }>();
+  const load = vi.fn(() => promise);
+  const Lazy = lazy(load);
+
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  await act(async () =>
+    root.render(
+      <ErrorBoundary>
+        <Suspense fallback="loading">
+          <Lazy />
+        </Suspense>
+      </ErrorBoundary>,
+    ),
+  );
+  const whileLoading = container.textContent;
+
+  await act(async () => reject(new Error('Failed to fetch dynamically imported module')));
+  const afterFailure = container.textContent;
+
+  expect({ afterFailure, loads: load.mock.calls.length, whileLoading }).toEqual({
+    afterFailure: 'error boundary caught',
+    loads: 1,
+    whileLoading: 'loading',
+  });
   await act(async () => root.unmount());
 });
